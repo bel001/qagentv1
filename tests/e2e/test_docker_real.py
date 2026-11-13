@@ -1,0 +1,105 @@
+"""Integración Playwright/Chromium real; nunca forma parte de una prueba simulada.
+
+Necesita internet además de Docker: la imagen del proyecto instala `express` con npm.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import time
+from pathlib import Path
+
+import pytest
+
+from qagent.e2e.ejecucion import ejecutar_humo_e2e
+from qagent.e2e.modelos import ConfiguracionE2E
+
+FIXTURE = Path(__file__).parents[1] / "fixtures" / "issue186_e2e"
+
+pytestmark = [pytest.mark.docker, pytest.mark.red]
+
+#: Presupuesto del humo E2E: con las imágenes ya construidas, entre 5 y 10 s.
+PRESUPUESTO_E2E_S = 10
+
+
+def test_playwright_real_detecta_exitos_y_fallos_con_capturas(
+    cliente_docker, tmp_path: Path
+) -> None:
+    project = tmp_path / "web"
+    shutil.copytree(FIXTURE, project)
+    result = ejecutar_humo_e2e(
+        project,
+        config=ConfiguracionE2E(
+            startup_timeout_s=20, route_timeout_s=8, total_timeout_s=90
+        ),
+        client=cliente_docker,
+    )
+    by_path = {route["path"]: route for route in result["routes"]}
+    assert by_path["/"]["status"] == "cumple"
+    assert by_path["/otro"]["status"] == "cumple"
+    assert by_path["/error-http"]["http_status"] == 500
+    assert by_path["/error-js"]["page_errors"]
+    assert by_path["/vacia"]["visible_content"] is False
+    assert by_path["/red-externa"]["request_errors"]
+    for route in by_path.values():
+        if route["status"] == "falla":
+            assert route["screenshot"]
+            screenshot = (
+                project / ".qagent" / "runs" / result["run_id"] / route["screenshot"]
+            )
+            assert screenshot.is_file() and screenshot.stat().st_size > 0
+    assert result["tokens"] == 0
+    assert result["limits"]["network"] == "none"
+
+
+def test_app_que_no_arranca_queda_sin_veredicto_y_con_log(
+    cliente_docker, tmp_path: Path
+) -> None:
+    project = tmp_path / "web-no-start"
+    shutil.copytree(FIXTURE, project)
+    (project / ".qagent").mkdir()
+    (project / ".qagent/e2e.json").write_text(
+        json.dumps({"start_command": ["node", "archivo-inexistente.js"]}),
+        encoding="utf-8",
+    )
+    result = ejecutar_humo_e2e(
+        project,
+        config=ConfiguracionE2E(startup_timeout_s=3, total_timeout_s=15),
+        client=cliente_docker,
+    )
+    assert result["status"] == "sin_veredicto"
+    assert result["startup"]["ready"] is False
+    assert result["startup"]["reason"]
+    assert result["startup"]["log"]
+    assert result["summary"]["no_verdict"] == result["summary"]["total"] == 6
+    assert result["routes"] == []
+
+
+def test_el_humo_e2e_cabe_en_el_presupuesto(cliente_docker, tmp_path: Path) -> None:
+    """Con las imágenes ya construidas, el humo completo cabe en 5–10 s.
+
+    La primera corrida construye la imagen del proyecto (npm install): ese coste es de
+    una vez, así que se mide la segunda.
+    """
+    project = tmp_path / "web-presupuesto"
+    shutil.copytree(FIXTURE, project)
+
+    ejecutar_humo_e2e(project, config=ConfiguracionE2E(), client=cliente_docker)
+
+    inicio = time.monotonic()
+    result = ejecutar_humo_e2e(
+        project, config=ConfiguracionE2E(), client=cliente_docker
+    )
+    total = time.monotonic() - inicio
+
+    assert result["status"] != "sin_veredicto"
+    assert total <= PRESUPUESTO_E2E_S, (
+        f"el humo E2E tardó {total:.1f} s y el presupuesto es {PRESUPUESTO_E2E_S} s"
+    )
+    # El tiempo se puede explicar: arranque de la app, del navegador y de las rutas.
+    timing = result["timing"]
+    assert timing["startup_ms"] > 0
+    assert timing["browser_ms"] > 0
+    assert timing["routes_ms"] > 0
+    assert result["limits"]["budget_s"] == PRESUPUESTO_E2E_S

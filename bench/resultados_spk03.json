@@ -1,0 +1,635 @@
+{
+  "item": "SPK-03",
+  "referencia": "ADR-008 sección 4.1",
+  "entorno": {
+    "sistema_operativo": "Windows",
+    "version_so": "10.0.26200",
+    "arquitectura": "AMD64",
+    "procesador": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "version_python": "3.13.17",
+    "fecha_ejecucion": "2026-11-11 23:24:16"
+  },
+  "configuracion": {
+    "banco": "bench/banco_mvp.py",
+    "repeticiones": 5,
+    "ia_simulada": true,
+    "tokens_reales": 0,
+    "docker_usado": false
+  },
+  "metricas_consolidadas": {
+    "traza": "planificar → (generar → ejecutar_revisar) × 6 → fin",
+    "num_transiciones": 14,
+    "decisiones": {
+      "bug_detectado": 3,
+      "accept": 3,
+      "todos_intento_1": true,
+      "laundering_detectado": false
+    },
+    "llamadas_llm": {
+      "planner": 1,
+      "generator": 6,
+      "reviewer": 0
+    },
+    "tamanios_prompts_caracteres": {
+      "planner_total": 4791,
+      "generator_total": 18514,
+      "generator_promedio_por_llamada": 3085.7,
+      "generator_por_llamada": [
+        3602,
+        3508,
+        3095,
+        2865,
+        2620,
+        2824
+      ],
+      "reviewer_total": 0
+    },
+    "tiempo_coordinacion_s": {
+      "min": 0.3025,
+      "max": 0.3197,
+      "medio": 0.3084,
+      "repeticiones_medidas": [
+        0.3197,
+        0.313,
+        0.3036,
+        0.3034,
+        0.3025
+      ]
+    },
+    "reproducibilidad": {
+      "exito": true,
+      "reproducibilidad_ratio": "5 de 5",
+      "misma_traza": true,
+      "mismas_decisiones": true,
+      "mismos_prompts": true
+    }
+  },
+  "detalle_decisiones": [
+    {
+      "objetivo": "calcular_descuento",
+      "decision": "bug_detectado",
+      "intentos": 1,
+      "laundering_detectado": false,
+      "codigo_hash": "d9d016fc15afa1f532f4367c04d06284792eb33b2b260959c4aebcf6e0a095b1",
+      "duracion_generacion_s": 0.026,
+      "duracion_revision_s": 0.031
+    },
+    {
+      "objetivo": "clasificar_edad",
+      "decision": "bug_detectado",
+      "intentos": 1,
+      "laundering_detectado": false,
+      "codigo_hash": "f5b209ac0a474c6172e400a0467fa3243dc37a2f7784e9b5de4ff1a8a4057836",
+      "duracion_generacion_s": 0.025,
+      "duracion_revision_s": 0.025
+    },
+    {
+      "objetivo": "buscar_elemento_mayor",
+      "decision": "bug_detectado",
+      "intentos": 1,
+      "laundering_detectado": false,
+      "codigo_hash": "f0ca01f8ff9665f9a9d151b3eaa480797ca29cd0c8bf374466d0f53ea5c07de3",
+      "duracion_generacion_s": 0.023,
+      "duracion_revision_s": 0.022
+    },
+    {
+      "objetivo": "es_palindromo",
+      "decision": "accept",
+      "intentos": 1,
+      "laundering_detectado": false,
+      "codigo_hash": "f8c5118441e18c20dd581591be66699c7a1804943a00daf3fc6ef0cb335fb561",
+      "duracion_generacion_s": 0.022,
+      "duracion_revision_s": 0.021
+    },
+    {
+      "objetivo": "invertir_palabras",
+      "decision": "accept",
+      "intentos": 1,
+      "laundering_detectado": false,
+      "codigo_hash": "955bf2b91d8968622d6f40f96418dc8583260f3b05a49d134ab2a42e0f9ebf5b",
+      "duracion_generacion_s": 0.02,
+      "duracion_revision_s": 0.018
+    },
+    {
+      "objetivo": "formatear_moneda",
+      "decision": "accept",
+      "intentos": 1,
+      "laundering_detectado": false,
+      "codigo_hash": "94f09cdd50d4babaf67bae0493fe1a4146b10c32cdb3239e2baa479b0299257f",
+      "duracion_generacion_s": 0.021,
+      "duracion_revision_s": 0.019
+    }
+  ],
+  "corridas_individuales": [
+    {
+      "duracion_s": 0.3196553000016138,
+      "traza": [
+        "planificar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "fin"
+      ],
+      "num_transiciones": 14,
+      "decisiones": [
+        {
+          "objetivo": "calcular_descuento",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "d9d016fc15afa1f532f4367c04d06284792eb33b2b260959c4aebcf6e0a095b1",
+          "duracion_generacion_s": 0.026,
+          "duracion_revision_s": 0.031
+        },
+        {
+          "objetivo": "clasificar_edad",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f5b209ac0a474c6172e400a0467fa3243dc37a2f7784e9b5de4ff1a8a4057836",
+          "duracion_generacion_s": 0.025,
+          "duracion_revision_s": 0.025
+        },
+        {
+          "objetivo": "buscar_elemento_mayor",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f0ca01f8ff9665f9a9d151b3eaa480797ca29cd0c8bf374466d0f53ea5c07de3",
+          "duracion_generacion_s": 0.023,
+          "duracion_revision_s": 0.022
+        },
+        {
+          "objetivo": "es_palindromo",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f8c5118441e18c20dd581591be66699c7a1804943a00daf3fc6ef0cb335fb561",
+          "duracion_generacion_s": 0.022,
+          "duracion_revision_s": 0.021
+        },
+        {
+          "objetivo": "invertir_palabras",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "955bf2b91d8968622d6f40f96418dc8583260f3b05a49d134ab2a42e0f9ebf5b",
+          "duracion_generacion_s": 0.02,
+          "duracion_revision_s": 0.018
+        },
+        {
+          "objetivo": "formatear_moneda",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "94f09cdd50d4babaf67bae0493fe1a4146b10c32cdb3239e2baa479b0299257f",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        }
+      ],
+      "prompts": {
+        "planner": {
+          "llamadas": 1,
+          "caracteres_total": 4791,
+          "caracteres_por_llamada": [
+            4791
+          ]
+        },
+        "generator": {
+          "llamadas": 6,
+          "caracteres_total": 18514,
+          "caracteres_por_llamada": [
+            3602,
+            3508,
+            3095,
+            2865,
+            2620,
+            2824
+          ]
+        },
+        "reviewer": {
+          "llamadas": 0,
+          "caracteres_total": 0,
+          "caracteres_por_llamada": []
+        }
+      }
+    },
+    {
+      "duracion_s": 0.31300850000116043,
+      "traza": [
+        "planificar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "fin"
+      ],
+      "num_transiciones": 14,
+      "decisiones": [
+        {
+          "objetivo": "calcular_descuento",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "d9d016fc15afa1f532f4367c04d06284792eb33b2b260959c4aebcf6e0a095b1",
+          "duracion_generacion_s": 0.024,
+          "duracion_revision_s": 0.025
+        },
+        {
+          "objetivo": "clasificar_edad",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f5b209ac0a474c6172e400a0467fa3243dc37a2f7784e9b5de4ff1a8a4057836",
+          "duracion_generacion_s": 0.025,
+          "duracion_revision_s": 0.032
+        },
+        {
+          "objetivo": "buscar_elemento_mayor",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f0ca01f8ff9665f9a9d151b3eaa480797ca29cd0c8bf374466d0f53ea5c07de3",
+          "duracion_generacion_s": 0.023,
+          "duracion_revision_s": 0.023
+        },
+        {
+          "objetivo": "es_palindromo",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f8c5118441e18c20dd581591be66699c7a1804943a00daf3fc6ef0cb335fb561",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        },
+        {
+          "objetivo": "invertir_palabras",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "955bf2b91d8968622d6f40f96418dc8583260f3b05a49d134ab2a42e0f9ebf5b",
+          "duracion_generacion_s": 0.02,
+          "duracion_revision_s": 0.021
+        },
+        {
+          "objetivo": "formatear_moneda",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "94f09cdd50d4babaf67bae0493fe1a4146b10c32cdb3239e2baa479b0299257f",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        }
+      ],
+      "prompts": {
+        "planner": {
+          "llamadas": 1,
+          "caracteres_total": 4791,
+          "caracteres_por_llamada": [
+            4791
+          ]
+        },
+        "generator": {
+          "llamadas": 6,
+          "caracteres_total": 18514,
+          "caracteres_por_llamada": [
+            3602,
+            3508,
+            3095,
+            2865,
+            2620,
+            2824
+          ]
+        },
+        "reviewer": {
+          "llamadas": 0,
+          "caracteres_total": 0,
+          "caracteres_por_llamada": []
+        }
+      }
+    },
+    {
+      "duracion_s": 0.30361569999877247,
+      "traza": [
+        "planificar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "fin"
+      ],
+      "num_transiciones": 14,
+      "decisiones": [
+        {
+          "objetivo": "calcular_descuento",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "d9d016fc15afa1f532f4367c04d06284792eb33b2b260959c4aebcf6e0a095b1",
+          "duracion_generacion_s": 0.024,
+          "duracion_revision_s": 0.025
+        },
+        {
+          "objetivo": "clasificar_edad",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f5b209ac0a474c6172e400a0467fa3243dc37a2f7784e9b5de4ff1a8a4057836",
+          "duracion_generacion_s": 0.024,
+          "duracion_revision_s": 0.027
+        },
+        {
+          "objetivo": "buscar_elemento_mayor",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f0ca01f8ff9665f9a9d151b3eaa480797ca29cd0c8bf374466d0f53ea5c07de3",
+          "duracion_generacion_s": 0.024,
+          "duracion_revision_s": 0.022
+        },
+        {
+          "objetivo": "es_palindromo",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f8c5118441e18c20dd581591be66699c7a1804943a00daf3fc6ef0cb335fb561",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        },
+        {
+          "objetivo": "invertir_palabras",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "955bf2b91d8968622d6f40f96418dc8583260f3b05a49d134ab2a42e0f9ebf5b",
+          "duracion_generacion_s": 0.02,
+          "duracion_revision_s": 0.018
+        },
+        {
+          "objetivo": "formatear_moneda",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "94f09cdd50d4babaf67bae0493fe1a4146b10c32cdb3239e2baa479b0299257f",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.02
+        }
+      ],
+      "prompts": {
+        "planner": {
+          "llamadas": 1,
+          "caracteres_total": 4791,
+          "caracteres_por_llamada": [
+            4791
+          ]
+        },
+        "generator": {
+          "llamadas": 6,
+          "caracteres_total": 18514,
+          "caracteres_por_llamada": [
+            3602,
+            3508,
+            3095,
+            2865,
+            2620,
+            2824
+          ]
+        },
+        "reviewer": {
+          "llamadas": 0,
+          "caracteres_total": 0,
+          "caracteres_por_llamada": []
+        }
+      }
+    },
+    {
+      "duracion_s": 0.30344160000095144,
+      "traza": [
+        "planificar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "fin"
+      ],
+      "num_transiciones": 14,
+      "decisiones": [
+        {
+          "objetivo": "calcular_descuento",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "d9d016fc15afa1f532f4367c04d06284792eb33b2b260959c4aebcf6e0a095b1",
+          "duracion_generacion_s": 0.024,
+          "duracion_revision_s": 0.026
+        },
+        {
+          "objetivo": "clasificar_edad",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f5b209ac0a474c6172e400a0467fa3243dc37a2f7784e9b5de4ff1a8a4057836",
+          "duracion_generacion_s": 0.025,
+          "duracion_revision_s": 0.026
+        },
+        {
+          "objetivo": "buscar_elemento_mayor",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f0ca01f8ff9665f9a9d151b3eaa480797ca29cd0c8bf374466d0f53ea5c07de3",
+          "duracion_generacion_s": 0.025,
+          "duracion_revision_s": 0.022
+        },
+        {
+          "objetivo": "es_palindromo",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f8c5118441e18c20dd581591be66699c7a1804943a00daf3fc6ef0cb335fb561",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        },
+        {
+          "objetivo": "invertir_palabras",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "955bf2b91d8968622d6f40f96418dc8583260f3b05a49d134ab2a42e0f9ebf5b",
+          "duracion_generacion_s": 0.02,
+          "duracion_revision_s": 0.017
+        },
+        {
+          "objetivo": "formatear_moneda",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "94f09cdd50d4babaf67bae0493fe1a4146b10c32cdb3239e2baa479b0299257f",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        }
+      ],
+      "prompts": {
+        "planner": {
+          "llamadas": 1,
+          "caracteres_total": 4791,
+          "caracteres_por_llamada": [
+            4791
+          ]
+        },
+        "generator": {
+          "llamadas": 6,
+          "caracteres_total": 18514,
+          "caracteres_por_llamada": [
+            3602,
+            3508,
+            3095,
+            2865,
+            2620,
+            2824
+          ]
+        },
+        "reviewer": {
+          "llamadas": 0,
+          "caracteres_total": 0,
+          "caracteres_por_llamada": []
+        }
+      }
+    },
+    {
+      "duracion_s": 0.30247439999948256,
+      "traza": [
+        "planificar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "generar",
+        "ejecutar_revisar",
+        "fin"
+      ],
+      "num_transiciones": 14,
+      "decisiones": [
+        {
+          "objetivo": "calcular_descuento",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "d9d016fc15afa1f532f4367c04d06284792eb33b2b260959c4aebcf6e0a095b1",
+          "duracion_generacion_s": 0.024,
+          "duracion_revision_s": 0.025
+        },
+        {
+          "objetivo": "clasificar_edad",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f5b209ac0a474c6172e400a0467fa3243dc37a2f7784e9b5de4ff1a8a4057836",
+          "duracion_generacion_s": 0.025,
+          "duracion_revision_s": 0.025
+        },
+        {
+          "objetivo": "buscar_elemento_mayor",
+          "decision": "bug_detectado",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f0ca01f8ff9665f9a9d151b3eaa480797ca29cd0c8bf374466d0f53ea5c07de3",
+          "duracion_generacion_s": 0.023,
+          "duracion_revision_s": 0.023
+        },
+        {
+          "objetivo": "es_palindromo",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "f8c5118441e18c20dd581591be66699c7a1804943a00daf3fc6ef0cb335fb561",
+          "duracion_generacion_s": 0.021,
+          "duracion_revision_s": 0.019
+        },
+        {
+          "objetivo": "invertir_palabras",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "955bf2b91d8968622d6f40f96418dc8583260f3b05a49d134ab2a42e0f9ebf5b",
+          "duracion_generacion_s": 0.02,
+          "duracion_revision_s": 0.018
+        },
+        {
+          "objetivo": "formatear_moneda",
+          "decision": "accept",
+          "intentos": 1,
+          "laundering_detectado": false,
+          "codigo_hash": "94f09cdd50d4babaf67bae0493fe1a4146b10c32cdb3239e2baa479b0299257f",
+          "duracion_generacion_s": 0.022,
+          "duracion_revision_s": 0.019
+        }
+      ],
+      "prompts": {
+        "planner": {
+          "llamadas": 1,
+          "caracteres_total": 4791,
+          "caracteres_por_llamada": [
+            4791
+          ]
+        },
+        "generator": {
+          "llamadas": 6,
+          "caracteres_total": 18514,
+          "caracteres_por_llamada": [
+            3602,
+            3508,
+            3095,
+            2865,
+            2620,
+            2824
+          ]
+        },
+        "reviewer": {
+          "llamadas": 0,
+          "caracteres_total": 0,
+          "caracteres_por_llamada": []
+        }
+      }
+    }
+  ]
+}

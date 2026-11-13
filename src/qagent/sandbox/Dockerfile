@@ -1,0 +1,31 @@
+# Imagen base del sandbox de QAgent: qagent-sandbox:base (EN-03).
+# Solo trae las herramientas de prueba. Las dependencias del proyecto del usuario
+# se instalan en una imagen derivada (paso 1, con red) y las pruebas corren sin red (paso 2).
+#
+# La versión de Python se elige al construir (ADR-013: de 3.10 a 3.15 según el
+# proyecto), así que aquí no puede fijarse un único digest como en las demás
+# imágenes base (Java, Node y navegador, fijadas por digest en B7). La decisión y
+# los digests están en `docs/desarrollo.md` (sección «Imágenes base del sandbox»).
+ARG PYTHON_VERSION=3.11
+FROM python:${PYTHON_VERSION}-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# httpx lo necesita fastapi.testclient.TestClient; fastapi viene del requirements.txt del proyecto.
+RUN pip install \
+        pytest==9.1.1 \
+        pytest-cov==7.1.0 \
+        coverage==7.16.2 \
+        mutmut==3.8.0 \
+        import-linter==2.15 \
+        httpx==0.28.1
+
+RUN useradd --create-home --uid 1000 sandbox \
+    && mkdir -p /work/proyecto /work/tests /out \
+    && chown -R sandbox:sandbox /work /out
+
+USER sandbox
+WORKDIR /work

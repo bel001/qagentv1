@@ -1,0 +1,83 @@
+/* configuracion.css — pantalla «Configuración» (conexión por etapa, motor, límites, apariencia) y modal «Agregar API».
+   La pantalla usa los tokens del sistema (css/tokens.css, sección 1); la barra, la cabecera, las tarjetas,
+   los chips y los avisos se comparten con Inicio (inicio.css). */
+.cfg-rejilla{grid-template-columns:minmax(0,1fr) minmax(300px,380px)}
+
+/* Conexión de IA por etapa: una fila por etapa. Las filas comparten las columnas (subgrid): el logo, el
+   modelo, el estado y los botones quedan alineados aunque una etapa esté conectada y otra no. */
+.cfg-tarjeta-etapas{container:etapas/inline-size}
+.cfg-etapas{display:grid;grid-template-columns:minmax(150px,200px) minmax(0,1fr) max-content max-content;column-gap:var(--esp-4);width:100%}
+.cfg-etapa{grid-column:1/-1;display:grid;grid-template-columns:subgrid;row-gap:var(--esp-3);align-items:center;padding:var(--esp-4) 0}
+.cfg-etapa+.cfg-etapa{border-top:var(--borde-ancho) solid var(--borde)}
+.cfg-etapa-nombre{display:flex;flex-direction:column}
+.cfg-etapa-nombre b{font-weight:var(--peso-medio)}
+.cfg-etapa-modelo{display:flex;flex-direction:column;gap:var(--esp-1);min-width:0}
+.cfg-etapa-acciones{display:flex;align-items:center;gap:var(--esp-2);justify-content:flex-end}
+.cfg-modelo{display:flex;align-items:center;gap:var(--esp-3);min-width:0}
+.cfg-modelo>div{display:flex;flex-direction:column;min-width:0}
+.cfg-modelo b{font-family:var(--fuente-mono);font-size:13px;font-weight:var(--peso-medio);overflow-wrap:anywhere}
+.cfg-vacio{color:var(--texto-3)}
+.cfg-aviso{color:var(--aviso-t);font-size:var(--texto-meta)}
+.cfg-quitar{color:var(--texto-2);font-size:var(--texto-meta)}
+
+/* Logo de cada proveedor */
+.prov-logo{flex:none;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:var(--radio-control);
+  background:var(--hundido);border:var(--borde-ancho) solid var(--borde);color:var(--prov-otro)}
+.prov-logo img{display:block;border-radius:4px}
+.prov-anthropic{color:var(--prov-anthropic)} .prov-openrouter{color:var(--prov-openrouter)}
+.prov-gemini{color:var(--prov-gemini)} .prov-groq{color:var(--prov-groq)} .prov-deepseek{color:var(--prov-deepseek)} .prov-otro{color:var(--prov-otro)}
+
+/* Límites de verificación: dos selectores lado a lado, como la maqueta */
+.cfg-limites{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--esp-4);width:100%}
+.cfg-campo-ancho{grid-column:1/-1}
+.cfg-campo{display:flex;flex-direction:column;gap:var(--esp-2);min-width:0}
+.cfg-select select{appearance:none;-webkit-appearance:none;padding-right:var(--esp-6);cursor:pointer}
+.cfg-select select:disabled{cursor:not-allowed}
+.cfg-select select option{background:var(--superficie);color:var(--texto)}
+.cfg-estado-guardado:empty{display:none}
+
+/* Motor de ejecución */
+.cfg-pasos-motor{display:flex;flex-direction:column;gap:var(--esp-1);padding-left:var(--esp-5);color:var(--texto-2);font-size:var(--texto-meta)}
+
+/* Espacio en disco (issue 267) */
+.esp-datos{display:flex;flex-direction:column;width:100%;margin:0}
+.esp-fila{display:flex;justify-content:space-between;align-items:baseline;gap:var(--esp-4);padding:var(--esp-2) 0}
+.esp-fila+.esp-fila{border-top:var(--borde-ancho) solid var(--borde)}
+.esp-fila dt{display:flex;flex-direction:column;min-width:0;color:var(--texto)}
+.esp-fila dd{margin:0;text-align:right;color:var(--texto);font-family:var(--fuente-mono);font-size:13px;white-space:nowrap}
+.esp-total dt,.esp-total dd{font-weight:var(--peso-fuerte)}
+.esp-libre{display:flex;flex-wrap:wrap;gap:var(--esp-2)}
+.esp-acciones{display:flex;flex-wrap:wrap;gap:var(--esp-2)}
+.esp-compactar{width:100%;color:var(--texto-2);font-size:var(--texto-meta)}
+.esp-compactar summary{cursor:pointer;color:var(--enlace)}
+.esp-pasos{display:flex;flex-direction:column;gap:var(--esp-2);padding-left:var(--esp-5);margin-top:var(--esp-2)}
+.esp-codigo{margin:var(--esp-2) 0 0;padding:var(--esp-3);background:var(--hundido);border:var(--borde-ancho) solid var(--borde);border-radius:var(--radio-control);color:var(--texto);font-family:var(--fuente-mono);font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere}
+.esp-subtitulo{color:var(--texto-2);margin:var(--esp-2) 0 var(--esp-1)}
+.esp-lista{display:flex;flex-direction:column;gap:var(--esp-1);padding-left:var(--esp-5);margin:0 0 var(--esp-2);color:var(--texto)}
+
+/* Apariencia */
+.cfg-temas{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--esp-3);width:100%}
+.cfg-tema{display:flex;flex-direction:column;align-items:flex-start;gap:var(--esp-3);padding:var(--esp-4);border:var(--borde-ancho) solid var(--borde);border-radius:var(--radio-control);background:var(--hundido);color:var(--texto);font:inherit;cursor:pointer}
+.cfg-tema.on{border-color:var(--enlace)}
+.cfg-tema:disabled{opacity:.5;cursor:not-allowed}
+
+@media(max-width:1100px){.cfg-rejilla{grid-template-columns:minmax(0,1fr)}}
+/* Tarjeta angosta: cada etapa en dos líneas (nombre y estado; modelo y botones), sin aplastar el modelo. */
+@container etapas (max-width:720px){
+  .cfg-etapas{grid-template-columns:minmax(0,1fr) max-content}
+  .cfg-etapa-nombre,.cfg-etapa-modelo{grid-column:1}
+  .cfg-etapa-estado,.cfg-etapa-acciones{grid-column:2}
+  .cfg-etapa-nombre,.cfg-etapa-estado{grid-row:1}
+  .cfg-etapa-modelo,.cfg-etapa-acciones{grid-row:2}
+  .cfg-etapa-estado{justify-self:end}
+}
+@media(max-width:760px){
+  .cfg-limites{grid-template-columns:minmax(0,1fr)}
+}
+
+/* Modal «Agregar API» */
+#m-api select.inp{cursor:pointer}
+#m-api select.inp option{background:var(--superficie);color:var(--texto)}
+.api-estado{font-size:12.5px;min-height:18px}
+.api-estado.ok{color:var(--exito-t)}
+.api-estado.no{color:var(--bug-t)}

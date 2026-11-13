@@ -1,0 +1,48 @@
+# Mantiene el backlog de Notion al día con los issues de GitHub (scripts/sincronizar_notion.py).
+#
+# - Cuando se crea, edita, asigna, cierra o reabre un issue: sincroniza ese issue. Si es una
+#   épica nueva de la plantilla («EP - Título»), antes le pone el número siguiente.
+# - Todos los días: sincroniza los abiertos y los cerrados en los últimos 30 días, para
+#   recoger cambios que GitHub no avisa (por ejemplo, agregar un sub-issue a una épica).
+# - A mano (Actions > Backlog de Notion > Run workflow): lo mismo que el diario.
+#
+# Necesita el secreto NOTION_TOKEN y la variable NOTION_DATABASE_ID del repositorio.
+# Los eventos de issues solo disparan este workflow desde la rama por defecto.
+name: Backlog de Notion
+
+on:
+  issues:
+    types: [opened, edited, closed, reopened, assigned, unassigned, labeled, unlabeled]
+  schedule:
+    - cron: "0 11 * * *"  # 6:00 en Perú
+  workflow_dispatch:
+
+permissions:
+  issues: write  # leer issues y numerar las épicas nuevas (EP - … → EP-16 - …)
+
+concurrency:
+  group: notion-${{ github.event.issue.number || 'todos' }}
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    name: Sincronizar con Notion
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.2.2
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13.17"
+      - name: Sincronizar
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ vars.NOTION_DATABASE_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          SPRINT_ACTUAL: ${{ vars.SPRINT_ACTUAL || 'Sprint 2' }}
+        run: |
+          if [ "${{ github.event_name }}" = "issues" ]; then
+            python scripts/sincronizar_notion.py --issue "${{ github.event.issue.number }}"
+          else
+            python scripts/sincronizar_notion.py --todos
+          fi

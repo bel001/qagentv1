@@ -1,0 +1,25 @@
+.env
+.env.*
+!.env.example
+docs/evidencias/
+config.local.toml
+.qagent/
+.pyagent/
+__pycache__/
+*.pyc
+.venv/
+.coverage
+coverage.json
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+mutants/
+*.egg-info/
+.idea
+# Empaquetado
+build/
+dist/
+# Claude Code: skills y ajustes personales. Las skills del equipo sí se versionan.
+.claude/skills/*
+!.claude/skills/documentar-issue/
+.claude/settings.local.json

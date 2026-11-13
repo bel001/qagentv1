@@ -1,0 +1,1136 @@
+# Arquitectura de QAgent
+
+> **Ítems:** EN-01 — Arquitectura GAIA y contratos JSON (Sprint 1) · EN-20 — Arquitectura del Sprint 2 · **Responsable:** Oncoy Patricio, Angel · **Estado:** borrador para aprobación del equipo
+
+QAgent genera y valida pruebas para el código del usuario. Hoy cubre Python 3.10+ con pytest (**pruebas unitarias de funciones** y **pruebas de endpoints FastAPI**) y Java con JUnit 5 (**unitarias en proyectos Maven de un módulo** y **controladores Spring MVC** con MockMvc y `@MockBean`; ver `docs/java/spring-mockmvc.md`). JavaScript y TypeScript usan Vitest (**unitarias de funciones**, **componentes React** con Testing Library y mutación con Stryker en funciones críticas; EP-11). Tres agentes basados en LLM (Planner, Generator y Reviewer) trabajan bajo un orquestador determinista, y todas las pruebas se ejecutan en un sandbox Docker aislado.
+
+En el **Sprint 2** la arquitectura se amplía sin rehacerse (ADR-010): una capa de **adaptadores por lenguaje** para JavaScript/TypeScript y Java (ADR-007, ADR-009), un **Agente Explicador** que traduce los hallazgos a lenguaje simple (ADR-008, implementado en EP-10), un **Agente Recomendador** definido para orientar la selección antes de una corrida (ADR-011; sus reglas ya orientan la selección en Vista previa, #197, y un LLM opcional, desactivado por defecto, las ordena y explica, #200) y nuevos tipos de prueba por prioridad (sección 10.6). El orquestador sigue siendo determinista.
+
+**Convención de los diagramas:** lo que todavía no está en `develop` lleva la etiqueta **«propuesto»** y se dibuja con línea punteada. Lo demás está implementado.
+
+| Qué cambia en el Sprint 2 | Dónde se describe | Decisión |
+|---|---|---|
+| Capa de adaptadores por lenguaje y contratos versionados | Secciones 4, 9 | ADR-007 (EN-17) |
+| tree-sitter para todos los lenguajes; Python migrado en TA-16 | Secciones 4, 11 | ADR-009 (SPK-04, TA-16) |
+| Agente Explicador como etapa posterior al veredicto | Secciones 4, 6.5, 8 | ADR-008 (SPK-03) |
+| Agente Recomendador antes de la corrida, sin autoridad de ejecución | Secciones 4, 6.1, 8, 9 | ADR-011 (#199) |
+| Imágenes del sandbox por lenguaje | Sección 7 | ADR-010 |
+| Nuevos tipos de prueba (componentes, E2E de humo, arquitectura) | Sección 10.6 | ADR-010 |
+| Lo que no cambia y las decisiones abiertas | Sección 13 | ADR-010 |
+
+El documento sigue el **modelo C4** (Contexto → Contenedores → Componentes → Código) y lo completa con vistas dinámicas, despliegue, el modelo GAIA de los agentes y las decisiones de diseño.
+
+**Contenido**
+
+1. [Estilo de arquitectura](#1-estilo-de-arquitectura)
+2. [Nivel 1 · Contexto](#2-nivel-1--contexto)
+3. [Nivel 2 · Contenedores](#3-nivel-2--contenedores)
+4. [Nivel 3 · Componentes del backend](#4-nivel-3--componentes-del-backend)
+5. [Nivel 4 · Código](#5-nivel-4--código)
+6. [Vistas dinámicas](#6-vistas-dinámicas)
+7. [Vista de despliegue](#7-vista-de-despliegue)
+8. [Modelo GAIA](#8-modelo-gaia)
+9. [Contratos JSON](#9-contratos-json)
+10. [Enfoque de pruebas](#10-enfoque-de-pruebas)
+11. [Stack tecnológico](#11-stack-tecnológico)
+12. [Decisiones de arquitectura](#12-decisiones-de-arquitectura)
+13. [Sprint 2: lo que no cambia y pendientes](#13-sprint-2-lo-que-no-cambia-y-pendientes)
+14. [Aprobación](#14-aprobación)
+
+---
+
+## 1. Estilo de arquitectura
+
+**QAgent es un monolito modular en capas, de escritorio, con un pipeline multiagente orquestado.**
+
+| Característica | Qué significa en QAgent |
+|---|---|
+| **Monolito** | Toda la aplicación (interfaz, orquestador, agentes y servicios) se instala y se ejecuta como **un solo programa** en la PC del usuario, en **un solo proceso Python**. No hay servicios separados que se desplieguen por su cuenta. |
+| **Modular** | Por dentro, el código está dividido en módulos con una responsabilidad cada uno (`agents`, `analysis`, `sandbox`, `llm`, `orchestrator`, `app` y, desde el Sprint 2, `lenguajes`) que se comunican por contratos JSON y reglas de dependencia (sección 4). |
+| **En capas** | Presentación → aplicación → datos. Cada capa solo usa la de abajo. |
+| **Pipeline orquestado** | Cada función pasa por etapas fijas (analizar → planificar → generar → ejecutar y revisar → reportar), dirigidas por una máquina de estados. En el Sprint 2 se suma una etapa final opcional, explicar (ADR-008), fuera de la máquina de estados. |
+| **Multiagente (GAIA)** | Las etapas que requieren criterio las cumplen agentes con roles, permisos y protocolos definidos (sección 8). |
+
+### Por qué monolito y no otra opción
+
+| Alternativa | Por qué no aplica a QAgent |
+|---|---|
+| **Microservicios** | Tiene sentido cuando varias partes escalan o se despliegan por separado y hay muchos usuarios concurrentes. QAgent tiene un usuario por instalación, 5 desarrolladores y un semestre: separar en servicios agregaría red, despliegue y fallos entre servicios sin ningún beneficio. |
+| **Cliente-servidor** | Requiere un servidor propio que atienda a varios clientes. En QAgent la interfaz y el backend corren en el mismo proceso: pywebview expone funciones Python a JavaScript directamente (`js_api`), sin HTTP. |
+| **Aplicación web** | Obligaría a subir el código del usuario a un servidor. QAgent analiza el código localmente y solo envía a las APIs de IA el resumen que necesita cada agente. |
+
+La relación cliente-servidor solo aparece **hacia afuera**: el backend es cliente de las APIs de los LLM (HTTPS) y del motor de Docker (socket local). El sandbox es un **proceso aparte** a propósito, por seguridad, pero no es un servicio de QAgent: es un contenedor efímero que se crea y destruye en cada prueba.
+
+---
+
+## 2. Nivel 1 · Contexto
+
+Quién usa QAgent y con qué sistemas externos se relaciona.
+
+```mermaid
+flowchart TB
+    DEV(["Desarrollador de software<br/>obtiene pruebas para su código"])
+    QA(["Equipo de QA<br/>revisa y aprueba pruebas"])
+    AUD(["Auditor<br/>obtiene un informe trazable y su costo"])
+    NT(["Usuario con poca experiencia en desarrollo<br/>entiende qué falló (Explicador)"])
+
+    QAG["QAgent<br/>aplicación de escritorio que genera<br/>y valida pruebas"]
+
+    SRC[("Proyecto del usuario<br/>Python / FastAPI<br/>JS/TS y Java (propuesto)")]
+    API["APIs de LLM<br/>Anthropic · Xiaomi · OpenAI"]
+    DOCK["Docker Desktop<br/>motor de contenedores"]
+    GIT["Repositorio Git remoto<br/>GitHub u otro (HU-02)"]
+
+    DEV --> QAG
+    QA --> QAG
+    AUD --> QAG
+    NT -.-> QAG
+    QAG -->|"lee sin ejecutar"| SRC
+    QAG -->|"HTTPS: prompts y usage"| API
+    QAG -->|"crea contenedores aislados"| DOCK
+    QAG -->|"git clone (opcional)"| GIT
+```
+
+| Actor o sistema | Relación con QAgent |
+|---|---|
+| Desarrollador de software | Abre su proyecto, lanza la corrida y obtiene pruebas listas para su repositorio. |
+| Equipo de QA | Revisa las pruebas, las alertas de laundering y los mutantes sobrevivientes. |
+| Auditor | Consulta el costo estimado y real, el historial y el informe exportable. |
+| Usuario con poca experiencia en desarrollo | Lee la explicación en lenguaje simple de cada hallazgo. Es el público principal del Explicador (ADR-008); a un usuario técnico le basta la traza actual. |
+| Proyecto del usuario | Fuente del análisis estático. Nunca se ejecuta fuera del sandbox. Hoy Python; JS/TS y Java en el Sprint 2. |
+| APIs de LLM | Un modelo por agente (ADR-001). Única salida a internet con información del proyecto. |
+| Docker Desktop | Ejecuta las pruebas en contenedores sin red. |
+| Repositorio Git remoto | Opcional: clonar un proyecto público por URL. |
+
+---
+
+## 3. Nivel 2 · Contenedores
+
+En C4, un "contenedor" es cualquier pieza que se ejecuta o guarda datos por separado (no necesariamente Docker).
+
+```mermaid
+flowchart TB
+    subgraph PC["PC del usuario · Windows 10/11"]
+        subgraph PROC["Proceso QAgent (Python 3.10+)"]
+            UI["Interfaz<br/>HTML · CSS · JS en pywebview"]
+            BE["Backend<br/>orquestador + agentes + servicios"]
+        end
+        CFG[("Configuración<br/>config.toml · .env")]
+        STO[("Almacenamiento<br/>.qagent/ · ~/.qagent/")]
+        SB["Sandbox<br/>contenedor Docker efímero<br/>una imagen por lenguaje"]
+    end
+    API["APIs de LLM"]
+
+    UI <-->|"js_api (mismo proceso) · eventos"| BE
+    BE -->|lee| CFG
+    BE <-->|"lee y escribe JSON"| STO
+    BE ==>|"Docker SDK"| SB
+    BE ==>|HTTPS| API
+```
+
+| Contenedor | Tecnología | Responsabilidad | Ítems |
+|---|---|---|---|
+| **Interfaz** | HTML, CSS, JS dentro de pywebview (carpeta `src/qagent/frontend/`, sin compilación; un componente por pantalla, ver ADR-003) | Pantallas: Bienvenida, Vista previa, Monitor en vivo, Ejecución, Reporte, Historial, Configuración | EN-08, HU-* |
+| **Backend** | Python 3.10+ | Análisis, orquestación, agentes, cálculo de métricas y costo. En el Sprint 2, también los adaptadores por lenguaje y el Explicador | EN-02 a EN-07, EN-14, EN-15, EN-17, EP-10 |
+| **Configuración** | TOML + variables de entorno | Modelos, precios, topes y reintentos (`config.toml`, se versiona); claves de API (`.env`, no se versiona) | EN-06 |
+| **Almacenamiento** | Archivos JSON | `.qagent/` dentro del proyecto analizado: corridas, specs, pruebas aprobadas, evidencias de bugs y comparaciones entre corridas. `~/.qagent/recientes.json`: proyectos recientes | EN-07, HU-01, HU-03, #193 |
+| **Sandbox** | Docker. Hoy: Python 3.11, pytest, coverage, mutmut, fastapi, httpx. Propuesto: una imagen por lenguaje (sección 7) | Ejecutar cada prueba aislada: `--network none`, `--rm`, 4 CPU (recortados a los de Docker), 3 GB, 120 s; configurables en `[sandbox]` | EN-03, EN-09, EN-15 |
+
+---
+
+## 4. Nivel 3 · Componentes del backend
+
+```mermaid
+flowchart TB
+    subgraph APPL["app/"]
+        BRIDGE["Puente js_api<br/>(EN-08)"]
+    end
+    subgraph ORCH["orchestrator/"]
+        ORQ["Máquina de estados<br/>(EN-04)"]
+    end
+    subgraph AGENTS["agents/"]
+        PL["Planner"]
+        GE["Generator"]
+        RE["Reviewer / Executor<br/>+ guardrail"]
+    end
+    subgraph SERV["Servicios"]
+        AN["analysis/<br/>funciones (EN-02) · rutas FastAPI y llama_a (EN-14)"]
+        PRY["proyectos/<br/>abrir, clonar y vista previa (HU-01 a HU-04)"]
+        LLM["llm/<br/>cliente real | simulado · tokens y costo (EN-05, EN-11)"]
+        SBX["sandbox/<br/>ejecución Docker (EN-03)"]
+        STO["almacenamiento/<br/>.qagent/ y recientes (EN-07)"]
+        CFG["configuración (EN-06)"]
+        CON["validación de contratos<br/>contracts/*.schema.json (EN-01)<br/>versionados v3 (EN-17)"]
+    end
+    subgraph LEN["lenguajes/ (EN-17, ADR-007)"]
+        REG["Registro<br/>detección del lenguaje"]
+        PYA["PythonAdapter<br/>delega en analysis/ y sandbox/"]
+        OTR["JS/TS · Java<br/>hoy solo detectan; tree-sitter (ADR-009)"]
+    end
+    EXP["Explicador<br/>etapa posterior al veredicto (ADR-008)"]
+    REC["Recomendador · definido<br/>Vista previa, antes de la corrida (ADR-011)"]
+
+    BRIDGE --> ORQ
+    BRIDGE --> PRY & STO
+    PRY --> AN
+    ORQ --> PL & GE & RE
+    ORQ --> AN & STO & CFG & CON
+    PL & GE & RE --> LLM
+    RE --> SBX
+    REG --> PYA & OTR
+    PYA --> AN & SBX
+    ORQ -->|"elige el adaptador (#168)"| REG
+    ORQ -. "después de results.json" .-> EXP
+    EXP -.-> LLM
+    PRY -. "resumen estático mínimo" .-> REC
+    REG -. "capacidades soportadas" .-> REC
+    REC -. "recommendation.v1" .-> BRIDGE
+    REC -. "opcional y futuro" .-> LLM
+```
+
+El Sprint 2 agrega tres piezas, todas fuera de la máquina de estados:
+
+- **`lenguajes/`** (EN-17) reúne todo lo que depende del lenguaje (análisis, comando de pruebas, imagen del sandbox, lectura de resultados y guardrail de aserciones) detrás de la interfaz `LanguageAdapter`. Desde #168 la corrida obtiene el adaptador mediante el registro y los agentes usan sus reglas; Python conserva el flujo completo. Java (#182) y JavaScript/TypeScript (EP-11) ya tienen `completo = True`. En un proyecto mixto, JS/TS solo se eligen con `package.json` o `tsconfig.json` en la raíz (`marcadores_si_mixto`), para que una carpeta `static/` no cambie el lenguaje de un proyecto Python. Una corrida usa un solo adaptador: con `.js` y `.ts` juntos se prueba el lenguaje con más archivos, y los del otro (`lenguajes_hermanos`) se avisan como «N archivos de … no se prueban en esta corrida» en la Vista previa, el Monitor, Resultados y el informe exportado (`fuera_de_la_corrida` en `results.json`), sin cambiar los conteos. Una corrida usa un solo adaptador: en un proyecto con `.js` y `.ts` se prueba el lenguaje con más archivos, y la Vista previa y el Monitor avisan cuántos archivos del otro no se prueban (`fuera_de_la_corrida`, `lenguajes_hermanos`). Un lenguaje futuro con `completo = False` hace que la aplicación avise que aún no admite una corrida en él.
+- **El Explicador** lo invoca el código de la corrida (`corrida.py`) cuando los veredictos ya están guardados. Es de solo lectura y, si falla o está desactivado, los informes siguen como hoy.
+- **El Recomendador** (ADR-011; reglas sin IA #197 y modo IA opcional #200 implementados, medición con LLM real #201 pendiente) se invoca desde Vista previa después del análisis estático y antes de `start_run`. Recibe una proyección mínima sin código, secretos ni rutas absolutas y devuelve `recommendation.v1`. Las capacidades permitidas vendrán de los adaptadores; el usuario conservará la confirmación y el cambio de la selección.
+
+| Componente | Carpeta | Responsabilidad | Ítems |
+|---|---|---|---|
+| Puente js_api | `src/qagent/app/` | Recibe las acciones de la interfaz (`desktop.py`) y le envía eventos. No contiene lógica de negocio. | EN-08 |
+| Proyectos | `src/qagent/proyectos/` | Lógica de los proyectos del usuario: abrir una carpeta, clonar un repositorio y vista previa. Sin dependencia de pywebview. | HU-01 a HU-04 |
+| Orquestador | `src/qagent/orchestrator/` | Máquina de estados de la corrida: ordena funciones por dependencias (`llama_a`), reparte trabajo, controla reintentos, topes de gasto y fallos. Sin LLM. | EN-04 |
+| Planner | `src/qagent/agents/` | Diseña casos de prueba y valores esperados por función o endpoint. | HU-11, HU-27 |
+| Generator | `src/qagent/agents/` | Escribe el test pytest de una función o endpoint. | HU-11, EN-15 |
+| Reviewer / Executor | `src/qagent/agents/` | Ejecuta en el sandbox, detecta laundering y decide. | HU-14, HU-16 |
+| Analizador | `src/qagent/analysis/` | Análisis estático con tree-sitter: firmas, tipos, docstrings, ramas, rutas FastAPI, `llama_a`, grafo de dependencias inter-archivo (`grafo_imports.py`, ADR-012), SHA-256. | EN-02, EN-14, TA-16, ADR-012 |
+| Cliente LLM | `src/qagent/llm/` | Llama a la API del modelo de cada agente (o a la IA simulada) y registra el `usage`. | EN-05, EN-11 |
+| Sandbox | `src/qagent/sandbox/` | Prepara la imagen, copia el proyecto y ejecuta pytest, coverage y mutmut. | EN-03, EN-09 |
+| Almacenamiento | `src/qagent/almacenamiento/` | `AlmacenProyecto`: crea `.qagent/` y lee y escribe `runs/<run_id>/run.json`, `specs/`, `tests/` (solo pruebas aprobadas), `evidencias_bugs/<run_id>/` (#193), `comparaciones/<run_verificacion>/` (#193) y `mutacion/` (último Mutation Score por función, #70); `recientes.py`: `~/.qagent/recientes.json`. Escritura atómica en UTF-8. | EN-07, HU-01, HU-03, #193 |
+| Registro de corridas | `src/qagent/storage/` | `log.json` y `results.json` de cada corrida, validados contra `run_log.schema.json`. | EN-05 |
+| Configuración | `src/qagent/config/` | Carga `config.toml` y `.env`, audita las claves y verifica Docker y Git. | EN-06 |
+| Contratos | `src/qagent/contracts/` | JSON Schema de cada mensaje; se validan en cada paso. En el Sprint 2, versiones con lenguaje y framework (sección 9). | EN-01, EN-17 |
+| Adaptadores por lenguaje | `src/qagent/lenguajes/` | Interfaz `LanguageAdapter` y registro: detección del lenguaje, análisis estático, comando de pruebas, entorno del sandbox, lectura de resultados, guardrail de aserciones y, desde #168, los prompts, filtros y reglas de revisión que usan los agentes. La corrida elige el adaptador con `adaptador_del_proyecto()`. Python completo; JS/TS y Java todavía no son completos y la app avisa que su lenguaje aún no se soporta. | EN-17, #168, EP-11a, EP-12a · ADR-007, ADR-009 |
+| Explicador | el de `[agentes.explicador]`, obligatorio (EP-10) | Explica en lenguaje simple los objetivos que no terminaron en `accept` con un LLM; si falla, tarda o no hay presupuesto, usa las plantillas deterministas. | EP-10 · ADR-008 |
+| Recomendador (definido) | por implementar en EP-15 | Prioriza tipos de prueba soportados a partir del resumen de Vista previa; reglas deterministas con LLM opcional y respaldo, sin iniciar corridas. | #199, #197, #200 · ADR-011 |
+
+### Reglas de dependencia
+
+1. `app/` solo llama al orquestador y a los servicios (por ejemplo `proyectos/`); no contiene lógica de negocio.
+2. El orquestador puede usar agentes y servicios.
+3. **Los agentes no se importan entre sí** ni importan al orquestador. Solo reciben y devuelven contratos.
+4. Los agentes usan el Cliente LLM; solo el Reviewer usa el Sandbox.
+5. Ningún componente ejecuta el código del usuario fuera del Sandbox.
+6. **Los servicios no dependen de la interfaz:** `proyectos/`, `almacenamiento/`, `analysis/`, `sandbox/`, `llm/`, `storage/` y `lenguajes/` nunca importan `qagent.app` ni pywebview. Así se prueban sin ventana.
+7. **Lo específico de un lenguaje vive solo en su adaptador** (`lenguajes/`), nunca en los agentes ni en el orquestador (ADR-007).
+8. **El Explicador no decide el flujo:** no cambia decisiones, intentos, cobertura ni `laundering_detectado`, no propone relajar aserciones, no ejecuta código y no llama a otros agentes (ADR-008).
+9. **Un único punto híbrido:** el único lugar donde un LLM interviene en una decisión es `ReviewerAgent._clasificar_con_llm`, que responde un enum cerrado (`error_test` o `bug_codigo`) solo cuando las reglas no alcanzan, con `stalled` como respaldo (ADR-008).
+10. **El Recomendador no decide el flujo:** solo propone tipos declarados como soportados por los adaptadores. No llama a `start_run`, no cambia la selección confirmada y no toca Planner, Generator, Reviewer ni resultados (ADR-011).
+
+---
+
+## 5. Nivel 4 · Código
+
+C4 recomienda dibujar este nivel solo para los componentes clave. Aquí se documenta el **orquestador y sus agentes**, que es donde se cumplen las reglas de GAIA, y se mapea cada componente del Nivel 3 al código que lo implementa. Refleja el código de `develop` al 2026-10-10.
+
+### 5.1 Orquestador y agentes
+
+```mermaid
+classDiagram
+    class Orquestador {
+        +planner: Planner
+        +generator: Generator
+        +reviewer: Reviewer
+        +bus: BusEventos
+        +tracker: TokenTracker
+        +max_intentos: int
+        +timeout_paso_s: float
+        +estado: Estado
+        +ejecutar(modulo) ResultadoCorrida
+        -_planificar(modulo) list
+        -_procesar_objetivo(contrato, objetivos)
+        -_generar(contrato, intento, feedback) dict
+        -_revisar(contrato, test, test_anterior, tope) dict
+        -_llamar(agente, funcion, args)
+        -_validar(nombre, dato, agente)
+        -_transicionar(destino, funcion)
+    }
+    class Planner {
+        <<Protocol>>
+        +planificar(modulo) list
+    }
+    class Generator {
+        <<Protocol>>
+        +generar(contrato, intento, feedback) dict
+    }
+    class Reviewer {
+        <<Protocol>>
+        +revisar(contrato, test, test_anterior) dict
+    }
+    class PlannerAgent
+    class GeneratorAgent
+    class ReviewerAgent {
+        +ruta_proyecto: Path
+        +imagen: str
+        +ejecutor: Ejecutor
+    }
+    class ClienteLLM {
+        <<Protocol>>
+        +generar(prompt, rol) RespuestaLLM
+    }
+    class ClienteLLMReal
+    class FakeLLMClient
+    class TokenTracker {
+        +fijar_contexto(funcion, intento)
+        +registrar(...)
+        +totales_por_agente() dict
+    }
+    class BusEventos {
+        +historial: list~Evento~
+        +suscribir(suscriptor)
+        +emitir(evento)
+    }
+    class Estado {
+        <<enumeration>>
+        PLANIFICAR
+        GENERAR
+        EJECUTAR_REVISAR
+        REINTENTAR
+        FIN
+        FALLO_CONTROLADO
+    }
+    class ResultadoCorrida {
+        +modulo: str
+        +estado_final: Estado
+        +motivo_fallo: str
+        +traza_estados: list
+        +tokens_por_agente: dict
+        +a_dict() dict
+    }
+    class ResultadoObjetivo {
+        +objetivo: str
+        +critical: bool
+        +decision: str
+        +intentos: int
+        +cobertura: dict
+        +laundering_detectado: bool
+        +motivo_estancado: str
+    }
+
+    Orquestador --> Planner
+    Orquestador --> Generator
+    Orquestador --> Reviewer
+    Orquestador --> BusEventos
+    Orquestador --> TokenTracker
+    Orquestador --> Estado
+    Orquestador ..> ResultadoCorrida : produce
+    ResultadoCorrida *-- ResultadoObjetivo
+    PlannerAgent ..|> Planner
+    GeneratorAgent ..|> Generator
+    ReviewerAgent ..|> Reviewer
+    PlannerAgent --> ClienteLLM
+    GeneratorAgent --> ClienteLLM
+    ReviewerAgent ..> ClienteLLM : opcional
+    ClienteLLMReal ..|> ClienteLLM
+    FakeLLMClient ..|> ClienteLLM
+    PlannerAgent --> TokenTracker
+    GeneratorAgent --> TokenTracker
+    ReviewerAgent --> TokenTracker
+```
+
+Fuera del diagrama, `ReviewerAgent` usa dos funciones: `sandbox.ejecutar_pruebas` (ejecución aislada) y `analysis.comparar_aserciones` (guardrail de laundering, HU-16). La regla de corte es la función pura `decidir_corte()` de `orquestador.py`.
+
+### 5.2 Del componente al código
+
+| Componente (Nivel 3) | Archivo | Punto de entrada |
+|---|---|---|
+| Puente js_api | `app/desktop.py` | `DesktopAPI` (`start_run`, `emit_event`, …) |
+| Orquestador | `orchestrator/orquestador.py` | `Orquestador.ejecutar(modulo) -> ResultadoCorrida` |
+| Estados | `orchestrator/estados.py` | `Estado`, `TRANSICIONES`, `validar_transicion()` |
+| Interfaces de los agentes | `orchestrator/puertos.py` | `Planner`, `Generator`, `Reviewer` (`Protocol`) |
+| Eventos del Monitor | `orchestrator/eventos.py` | `BusEventos`, `Evento` |
+| Planner | `agents/planner.py` | `PlannerAgent.planificar()` |
+| Generator | `agents/generator.py` | `GeneratorAgent.generar()` |
+| Reviewer / Executor | `agents/reviewer.py` | `ReviewerAgent.revisar()` |
+| Analizador | `analysis/analyzer.py` | `analizar_proyecto(raiz)` |
+| Guardrail de laundering | `analysis/laundering.py` | `comparar_aserciones()` |
+| Cliente LLM | `llm/fabrica.py`, `llm/cliente.py`, `llm/fake.py` | `crear_cliente(precio, claves, simulado=...)` |
+| Tokens y costo | `llm/tracker.py`, `llm/precios.py` | `TokenTracker`, `cargar_precios()` |
+| Sandbox | `sandbox/imagen.py`, `sandbox/ejecucion.py` | `preparar_imagen()`, `ejecutar_pruebas()` |
+| Hash del error | `sandbox/normalizacion.py` | `hash_error()` |
+| Contratos | `contracts/__init__.py` + `contracts/*.schema.json` | `validar(nombre, dato)` |
+| Registro de corridas | `storage/registro.py` | `escribir_corrida()` (`log.json`, `results.json`) |
+| Almacenamiento | `almacenamiento/proyecto.py`, `almacenamiento/recientes.py` | `AlmacenProyecto`, `recientes.registrar()` |
+| Configuración | `config/carga.py`, `config/entorno.py` | `cargar_configuracion()`, `verificar_entorno()` |
+| Proyectos | `proyectos/proyecto_local.py`, `clonador.py`, `vista_previa.py` | `inspeccionar_carpeta()`, `clonar()`, `generar_vista_previa()` |
+
+Todas las rutas son relativas a `src/qagent/`.
+
+### 5.3 Patrones de diseño del orquestador
+
+| Patrón | Dónde | Para qué |
+|---|---|---|
+| Máquina de estados con tabla explícita | `estados.py` | Cada transición se valida con `validar_transicion()`; una transición no prevista lanza `TransicionInvalida`. |
+| Puertos y adaptadores | `puertos.py` | El orquestador depende de interfaces, no de `agents/`. Los agentes reales y los simulados de los tests se intercambian sin tocarlo. |
+| Inyección de dependencias | constructor de `Orquestador` | Los agentes, el bus y el tracker se pasan desde afuera. |
+| Mediador | `Orquestador` | Todo mensaje entre agentes pasa por él (modelo de conocidos, sección 8.5). |
+| Validación en cada frontera | `_validar()`, `_coherente()` | Cada respuesta se valida contra su JSON Schema y se comprueba que sea del objetivo e intento pedidos. |
+| Observador | `BusEventos` | El Monitor se suscribe a los eventos; un suscriptor que falla no detiene la corrida. |
+| Tiempo máximo por paso | `_llamar()` | Cada llamada a un agente corre en un hilo daemon con `join(120 s)`; si no responde, `TimeoutPaso` (fallo controlado). |
+| Copia defensiva | `copy.deepcopy(contrato)` | Lo que un agente cambie en su copia del contrato no llega al intento siguiente. |
+
+### 5.4 Dependencias reales entre paquetes
+
+Grafo obtenido de los `import` de `src/qagent/`.
+
+```mermaid
+flowchart TB
+    app --> almacenamiento & config & proyectos & sandbox
+    agents --> analysis & contracts & llm & sandbox
+    orchestrator --> contracts & llm
+    almacenamiento --> storage
+    storage --> llm
+    storage -. "solo tipos" .-> orchestrator
+    proyectos --> analysis
+    config --> llm & sandbox
+    llm -. "import dentro de una función" .-> config
+    lenguajes --> analysis & contracts & sandbox
+```
+
+| Regla (sección 4) | ¿Se cumple? |
+|---|---|
+| 3 · Los agentes no se importan entre sí ni al orquestador | Sí. Y el orquestador tampoco importa `agents/`: los recibe por el constructor. |
+| 4 · Solo el Reviewer usa el Sandbox | Sí. Solo `agents/reviewer.py` importa `sandbox`. |
+| 6 · Los servicios no dependen de la interfaz | Sí. Nadie importa `qagent.app` salvo `__main__`. |
+
+Deuda conocida: `config` y `llm` se importan mutuamente (`llm/fabrica.py` lo resuelve con un import dentro de la función), y hay dos paquetes de persistencia, `storage/` (EN-05) y `almacenamiento/` (EN-07), donde el segundo usa `nuevo_run_id` del primero.
+
+### 5.5 Pendiente
+
+| Qué falta | Dónde está hoy | Referencia |
+|---|---|---|
+| Recorrer los módulos en orden topológico por `llama_a`. Hoy `ejecutar_corrida()` recorre todos los módulos seleccionados, en el orden del análisis. | `orchestrator/corrida.py` | Sección 6.4, regla 3 |
+| Tope de gasto antes de cada llamada al LLM. Hoy `ejecutar_corrida()` corta antes del siguiente módulo si se alcanzó el tope de `config.toml`, y el orquestador aplica el límite de tokens antes de cada objetivo y reintento. | `orchestrator/corrida.py`, `orchestrator/orquestador.py` | Sección 6.3 |
+| Corte por causa común entre objetivos distintos. Hoy el hash repetido se detecta solo dentro de un mismo objetivo. | `decidir_corte()` | Sección 6.4, regla 4 |
+
+Ya resueltos desde la primera versión de este documento: la corrida está conectada (`DesktopAPI.start_run` → `ejecutar_corrida()`), la caché de specs por huella del módulo existe en `.qagent/specs/` (HU-24) y la corrida pide el adaptador al registro y usa `planner_contract.v3` (#168).
+
+---
+
+## 6. Vistas dinámicas
+
+### 6.1 Pipeline de una corrida
+
+Antes de que exista una corrida, Vista previa analiza el proyecto y el usuario configura qué probar. ADR-011 inserta el Recomendador en ese momento, no dentro del pipeline operativo:
+
+```mermaid
+flowchart LR
+    A["Abrir proyecto"] --> V["Vista previa<br/>análisis estático"]
+    V -. "resumen mínimo + capacidades" .-> REC["Recomendador<br/>reglas + IA opcional"]
+    REC -. "recommendation.v1" .-> U{"Usuario confirma<br/>o cambia la selección"}
+    V --> U
+    U --> S["start_run<br/>corrida determinista"]
+```
+
+El resumen para el Recomendador excluye código completo, archivos, secretos y rutas absolutas; las rutas HTTP se tratan como datos. La validación estructural usa `recommendation.v1` y la futura integración de #197 deberá contrastar además cada tipo con las capacidades operativas declaradas por los adaptadores. Una respuesta inválida nunca inicia una corrida.
+
+Cada función o endpoint seleccionado pasa por estas etapas, en **orden de dependencias** (sección 6.4). Entre paréntesis, dónde se gastan tokens.
+
+```mermaid
+flowchart LR
+    A["1 · Abrir proyecto<br/>HU-01 · HU-02<br/>(0 tokens)"] --> L["Detectar lenguaje y<br/>elegir adaptador<br/>#168 · ADR-007<br/>(0 tokens)"]
+    L --> B["2 · Análisis estático<br/>tree-sitter (Python, JS/TS, Java)<br/>EN-02 · EN-14 · ADR-009<br/>(0 tokens)"]
+    B --> T{"¿Tipo?"}
+    T -->|función| C
+    T -->|endpoint FastAPI| C
+    C{"¿Spec en caché?<br/>mismo SHA-256<br/>HU-24"}
+    C -->|sí| D
+    C -->|no| P["3 · Planner<br/>planner_contract.v2<br/>(tokens altos)"]
+    P --> D["4 · Generator<br/>pytest o TestClient<br/>(tokens bajos)"]
+    D --> E["5 · Sandbox<br/>pytest + coverage<br/>(0 tokens)"]
+    E --> F{"6 · Reviewer<br/>¿aserciones legítimas?<br/>(tokens bajos)"}
+    F -->|"retry · error del test<br/>intento < 3"| D
+    F -->|"bug detectado<br/>(no se reintenta)"| R
+    F -->|accept| G{"¿critical: true?"}
+    F -->|"stalled · 3 intentos<br/>o hash de error repetido"| R
+    G -->|sí| M["Mutation testing<br/>mutmut · EN-09<br/>(0 tokens)"]
+    G -->|no| R["7 · Reporte<br/>log.json + results.json"]
+    M --> R
+    R -.->|"no cancelada, con presupuesto<br/>y Explicador activo"| X["8 · Explicador<br/>explicaciones.json<br/>(tokens bajos con LLM,<br/>0 con la plantilla de respaldo)"]
+```
+
+Desde #168 el registro detecta el lenguaje del proyecto (`adaptador_del_proyecto()`) y el análisis, los prompts, el comando de pruebas, la lectura de resultados y de la cobertura y el guardrail salen del adaptador elegido. El resto del pipeline es el mismo para todos los lenguajes. Si el proyecto solo tiene lenguajes cuyo adaptador aún no es completo, la app lo avisa al iniciar, sin gastar tokens.
+
+| Etapa | Qué produce | Métrica que alimenta |
+|---|---|---|
+| Sandbox | exit code, stdout/stderr, `coverage.json` | Pass Rate, cobertura de líneas y ramas |
+| Reviewer | `review_result` con n.º de intento | Iteraciones de autorreparación |
+| Cliente LLM | `usage` de cada llamada | Tokens por agente (`prompt_tokens` + `completion_tokens`) |
+| Mutation testing | mutantes muertos / totales | Mutation Score (solo funciones críticas) |
+| Explicador | `explicaciones.json` | Ninguna: no cambia resultados. Se registran sus tokens como agente `explicador` |
+
+### 6.2 Flujo de información
+
+Mensajes, en orden, para una función o endpoint.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant UI as Interfaz
+    participant OR as Orquestador
+    participant AST as Analizador
+    participant PL as Planner
+    participant GE as Generator
+    participant RE as Reviewer
+    participant SB as Sandbox
+    participant API as APIs LLM
+    participant FS as .qagent/
+
+    UI->>OR: iniciar_corrida(ruta, perfil)
+    OR->>AST: analizar(ruta)
+    AST-->>OR: estructura.json (funciones, endpoints, llama_a, SHA-256)
+    OR->>PL: estructura del módulo
+    PL->>API: prompt (contexto amplio)
+    API-->>PL: respuesta + usage
+    PL-->>OR: planner_contract.v2
+    loop hasta 3 intentos por función o endpoint
+        OR->>GE: contrato (+ feedback del intento anterior)
+        GE->>API: prompt (económico)
+        API-->>GE: código + usage
+        GE-->>OR: generated_test
+        OR->>RE: contrato + test (+ test anterior)
+        RE->>SB: ejecutar copia del proyecto + test
+        SB-->>RE: exit code · stdout · coverage.json
+        opt las reglas no distinguen error del test de bug del código
+            RE->>API: ¿error_test o bug_codigo?
+            API-->>RE: clasificación (enum cerrado) + usage
+        end
+        RE-->>OR: review_result (accept | retry | bug_detectado | stalled)
+    end
+    OR-)UI: eventos (agente, archivo, función, mensaje, hora)
+    OR->>FS: log.json + results.json
+    opt Explicador activo (sección 6.5)
+        OR->>FS: explicaciones.json
+    end
+    OR-->>UI: reporte final
+```
+
+### 6.3 Máquina de estados del orquestador
+
+Implementada en `orchestrator/estados.py` (EN-04). Una llamada a `Orquestador.ejecutar()` procesa **un módulo**.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PLANIFICAR
+    PLANIFICAR --> GENERAR: plan con objetivos
+    PLANIFICAR --> FIN: plan vacío
+    PLANIFICAR --> FALLO_CONTROLADO: contrato inválido o error del Planner
+    GENERAR --> EJECUTAR_REVISAR: test válido
+    GENERAR --> FALLO_CONTROLADO: contrato inválido, error o timeout
+    EJECUTAR_REVISAR --> REINTENTAR: retry
+    REINTENTAR --> GENERAR: intento + 1
+    EJECUTAR_REVISAR --> GENERAR: accept, bug_detectado o stalled · siguiente objetivo
+    EJECUTAR_REVISAR --> FIN: no quedan objetivos
+    EJECUTAR_REVISAR --> FALLO_CONTROLADO: timeout o error del sandbox
+    FIN --> [*]
+    FALLO_CONTROLADO --> [*]
+```
+
+- **Fallo controlado:** la corrida no se cuelga. `ejecutar()` nunca lanza la excepción: devuelve un `ResultadoCorrida` con el motivo y los objetivos que se alcanzaron a procesar, que `storage.escribir_corrida()` convierte en `log.json` y `results.json`.
+- **Corte de reintentos (`decidir_corte`):** `stalled` si el hash del error se repite respecto del intento anterior (`error_repetido`) o si se llega al tope de 3 intentos (`limite_intentos`).
+- **Un reintento nunca vuelve al Planner.** `REINTENTAR` solo puede ir a `GENERAR`; el plan se hace una vez por módulo.
+- **Pendiente** (sección 5.5): recorrer los módulos en orden topológico, el tope de gasto (`tope_por_corrida_usd`) antes de cada llamada al LLM y la caché del plan (HU-24).
+
+### 6.4 Manejo de fallos y dependencias
+
+**Problema:** de 5 pruebas A, B, C, D, E, pasan A y B; C falla, y D y E fallan "por culpa" de C (D usa C, E usa D). ¿Hay que rehacer el plan? **No.** Se resuelve con cuatro reglas, ninguna llama al Planner.
+
+**Regla 1 · Pruebas independientes.** Una prueba unitaria no depende de otra: cada test corre en su propio contenedor efímero, sin estado compartido. Si una función llama a otra del proyecto (`llama_a`), el test **simula** esa dependencia con mocks, así un bug en C no hace fallar el test de D.
+
+**Regla 2 · Clasificar el fallo antes de reintentar.** El Reviewer distingue:
+
+| Resultado en el sandbox | Clasificación | Decisión |
+|---|---|---|
+| Error de sintaxis, import, fixture o mock mal armado | `error_test`: el test está mal escrito | `retry` (hasta 3 intentos, solo Generator + Reviewer) |
+| La aserción falla con el valor esperado del contrato (docstring o declaración de la ruta) | `bug_codigo`: el código no cumple lo que declara | `bug_detectado`: **no se reintenta**; se reporta como hallazgo |
+| El test pasa | — | `accept` |
+| 3 intentos, o el hash del error normalizado se repite | — | `stalled` |
+
+Reintentar un `bug_codigo` para que el test pase sería Assertion Laundering. Por eso esta regla ahorra tokens y protege el oráculo a la vez.
+
+**Regla 3 · Orden topológico.** El orquestador procesa las funciones de las hojas hacia arriba según `llama_a`, con la biblioteca estándar:
+
+```python
+from graphlib import TopologicalSorter
+
+llama_a = {"c": [], "d": ["c"], "e": ["d"]}
+orden = list(TopologicalSorter(llama_a).static_order())  # ['c', 'd', 'e']
+```
+
+Si C termina en `bug_detectado` o `stalled`, D y E se prueban igual (con C simulado) y el reporte los marca con *"depende de C, que tiene un fallo"*, para indicar por dónde empezar a corregir.
+
+**Regla 4 · Corte por causa común.** Si varios tests fallan con el mismo error normalizado (mismo hash), el orquestador lo trata como una sola causa y no reintenta los demás.
+
+```mermaid
+flowchart LR
+    C["C<br/>bug_detectado"] -->|"D llama a C"| D["D<br/>se prueba con C simulado"]
+    D -->|"E llama a D"| E["E<br/>se prueba con D simulado"]
+    D -.-> N1["Reporte: depende de C"]
+    E -.-> N2["Reporte: depende de D"]
+```
+
+**Costo de cada opción** (precios del ADR-001):
+
+| Acción ante el fallo de C, D y E | Costo aproximado |
+|---|---|
+| Rehacer el plan del módulo con Claude Opus 5.5 | ~US$ 0.26 |
+| Reintentar C, D y E con Generator + Reviewer, 2 veces cada uno | ~US$ 0.04 |
+| Aplicando las reglas 2 y 4 (bug detectado o error repetido) | ~US$ 0 |
+
+### 6.5 Etapa del Explicador
+
+Decidida en ADR-008 (SPK-03) e implementada en EP-10 (#163, #164, #166, #167, #172). Corre en `corrida.py` cuando los veredictos ya están escritos, así que un fallo del Explicador nunca pierde resultados: sin `explicaciones.json`, o con uno inválido, los informes quedan como sin Explicador, y `log.json` y `results.json` nunca quedan desparejos.
+
+```mermaid
+sequenceDiagram
+    participant C as corrida.py
+    participant O as Orquestador
+    participant S as storage (results.json)
+    participant E as Explicador
+    participant I as Informes
+    C->>O: ejecutar(modulo)
+    O-->>C: ResultadoCorrida (veredictos cerrados)
+    C->>S: escribir_corrida(...) · resultados definitivos
+    alt no cancelada, con presupuesto y Explicador activo
+        C->>E: explicar(entrada de solo lectura)
+        E-->>C: explicaciones validadas con su schema
+        C->>S: explicaciones.json (archivo aparte)
+    else
+        Note over C: se omite y los informes usan las plantillas actuales
+    end
+    I->>S: leen results.json (+ explicaciones.json si es válido)
+```
+
+| Aspecto | Regla |
+|---|---|
+| Qué explica | Solo los objetivos que no terminaron en `accept` (bug detectado, estancado, sin veredicto). |
+| Dos niveles | Un LLM que lee **toda la traza de intentos** (`modo = "ia"`, el de por defecto) y, debajo, plantillas deterministas con el esperado, el obtenido y el motivo (0 tokens, siempre disponibles) que se usan si el LLM falla, tarda más de `tiempo_maximo_s` o se agota el presupuesto. |
+| Entradas | Contrato del Planner, `review_result` de cada intento y `ResultadoObjetivo`, pasados por `sanitizar_secretos`. Nunca claves, rutas absolutas ni el proyecto completo. |
+| Salida | `.qagent/runs/<run_id>/explicaciones.json` (validado contra `explicaciones.schema.json`), nunca dentro de `results.json`. Cada elemento cumple `explanation.v1` (`objetivo`, `decision`, `resumen`, `que_se_esperaba`, `que_paso`, `que_hacer`, `origen`, `modelo`). La `decision` es un eco: si no coincide con `results.json`, la explicación se descarta. |
+| Cuándo se omite | Corrida cancelada, límite de tokens o tope en USD alcanzado, perfil Humo o Explicador desactivado. |
+| Configuración | Su API es obligatoria como la de los otros agentes: se agrega en Configuración → «Explicando resultados» y sin ella no se inicia una corrida con la IA real. La corrida crea su cliente al final, así que una clave que falte en ese momento solo hace usar la plantilla. |
+| Público | Pensado sobre todo para usuarios con poca experiencia en desarrollo. `activo = false` lo apaga (pruebas y casos técnicos). |
+
+---
+
+## 7. Vista de despliegue
+
+```mermaid
+flowchart TB
+    subgraph WIN["PC del usuario · Windows 10/11"]
+        subgraph VENV["Entorno Python (.venv)"]
+            QA["QAgent<br/>pip install -e .<br/>pywebview · jsonschema"]
+        end
+        subgraph DD["Docker Desktop"]
+            IMG["qagent-sandbox:base<br/>Python 3.11 · pytest · coverage · mutmut"]
+            IMGN["qagent-sandbox:node<br/>Node 26 LTS · Vitest · coverage-v8 · Stryker"]
+            IMGJ["qagent-sandbox:java<br/>JDK 25 · Maven/Gradle · JUnit 5 · JaCoCo · PIT"]
+            IMGE["qagent-sandbox:navegador<br/>Playwright 1.64.1 · Chromium 156 (solo E2E)"]
+            IMGP["Imagen derivada por proyecto<br/>+ dependencias del usuario"]
+            CT["Contenedor efímero por prueba<br/>--network none · --rm"]
+            IMG --> IMGP --> CT
+            IMGN --> IMGP
+            IMGJ --> IMGP
+            IMGE --> IMGP
+        end
+        FS[("Disco<br/>proyecto del usuario · .qagent/ · ~/.qagent/")]
+    end
+    NET["Internet<br/>APIs LLM · Git remoto"]
+
+    QA --> DD
+    QA --> FS
+    QA ==> NET
+```
+
+| Flujo de red | Origen → destino | Cuándo |
+|---|---|---|
+| HTTPS a APIs LLM | Backend → Anthropic, Xiaomi, OpenAI | Cada llamada del Planner, Generator o Reviewer (salvo con IA simulada) |
+| `git clone` | Backend → repositorio remoto | Solo si el usuario clona por URL (HU-02) |
+| Instalación de dependencias | Docker → PyPI, npm, Maven Central / Gradle | Una vez por proyecto, al construir la imagen derivada (`pip install`, `npm ci`/`pnpm install`/`yarn install` sin scripts del proyecto, `mvn dependency:go-offline` o el equivalente de Gradle) |
+| **Ejecución de pruebas** | **Sin red** | Siempre (`--network none`) |
+
+**Requisitos de la máquina:** Windows 10/11, Python 3.10+, Docker Desktop y Git. EN-06 los verifica al abrir un proyecto. Analizar JS/TS o Java **no** exige Node ni un JDK en la PC del usuario: tree-sitter corre dentro de QAgent (ADR-009) y los runtimes solo viven en las imágenes del sandbox.
+
+**Imágenes por lenguaje (#169, #186).** La imagen de cada lenguaje la declara su adaptador (`LanguageAdapter.entorno_sandbox()`, ADR-007): Python usa `qagent-sandbox:base`, JavaScript y TypeScript `qagent-sandbox:node` y Java `qagent-sandbox:java`. El flujo E2E usa una imagen independiente, `qagent-sandbox:navegador`. Sus Dockerfile están junto al de Python con versiones fijas y `sandbox/imagen.py` tiene una receta por imagen. Una imagen se construye solo cuando una corrida que la necesita llama a `asegurar_imagen`; abrir un proyecto, Vista previa y los perfiles unitarios, de regresión, corrección o arquitectura nunca aprovisionan el navegador.
+
+| Imagen | Contenido (versión fija) | Dependencias del proyecto (imagen derivada, con red) |
+|---|---|---|
+| `qagent-sandbox:base` | Python 3.11, pytest, pytest-cov, coverage, mutmut, httpx | `requirements.txt` → `pip install` · etiqueta `req-<hash>` |
+| `qagent-sandbox:node` | Node 26.13.0 (LTS), Vitest 5.0.5, @vitest/coverage-v8 5.0.5, Stryker 10.1.1 (+ vitest-runner), TypeScript 6.0.3 y dependency-cruiser 18.6.0 | `package.json` + lockfile del gestor (npm, pnpm o yarn, ADR-015 #272) y el `package.json` de cada workspace → instalación con `--ignore-scripts` en `/work/node_modules` · etiqueta `node-<hash>` |
+| `qagent-sandbox:java` | Temurin JDK 25.0.4, Maven 3.9.16, Gradle 9.8.2, JUnit 5.14.4, JaCoCo 0.8.16, PIT 1.30.1 (+ junit5-plugin 1.2.3) | `pom.xml` → `mvn dependency:go-offline` en `/opt/qagent/m2`; o `build.gradle(.kts)` (+ settings, `gradle.properties`, `libs.versions.toml`) → caché de solo lectura `GRADLE_RO_DEP_CACHE` · etiqueta `java-<hash>` |
+| `qagent-sandbox:navegador` | Imagen oficial Noble fijada en Playwright 1.64.1, Node 26.13.0 y Chrome for Testing 156.0.8078.80 | `package.json` + lockfile → dependencias en `/work/node_modules` · etiqueta `browser-<hash>`; nunca descarga paquetes o navegadores durante la corrida |
+
+La etiqueta de la derivada sale del hash de sus archivos de dependencias: mientras no cambien, se reutiliza entre corridas (igual que con `requirements.txt`), y la limpieza al abrir la app borra las `req-`, `node-`, `java-` y `browser-` sin uso en 30 días. El contexto de build solo lleva esos archivos, nunca el código del proyecto ni su `.env`. Las dependencias quedan fuera de `/work/proyecto` (Node las busca subiendo hasta `/work/node_modules`; Maven y Gradle las leen de su repositorio en `/opt/qagent`), así el montaje de la copia del proyecto no las tapa. En un monorepo JS, las dependencias de los workspaces se suben a `/work/node_modules` y los paquetes del propio monorepo quedan como enlaces a `/work/proyecto/<ruta>` (ADR-015). La imagen de Java se construye con un proyecto de calentamiento (`sandbox/java/calentamiento`) para que los plugins de JUnit 5, JaCoCo y PIT queden descargados y funcionen sin red.
+
+Las reglas del sandbox son las mismas para todas: contenedor efímero (`--rm`), `--network none`, sistema de archivos de solo lectura salvo `/work/proyecto` (copia), `/out` y `/tmp` (64 MB), y los mismos CPU que Python (`ajustar_cpus_a_docker`). La memoria y el tiempo pueden cambiar por lenguaje en `[sandbox.<lenguaje>]` de `config.toml`; lo que no se fija (y los CPU) sale de `[sandbox]`, que sigue siendo el de Python (3 GB, 120 s).
+
+**Mediciones** (29/10/2026, Windows 11 con Docker Desktop 29.8.1, 16 CPU y 15,6 GB para Docker; construcción con `imagen.py` sin caché de construcción, con la imagen de origen ya descargada). La memoria es el pico del contenedor (`memory.max_usage_in_bytes`) en una prueba típica: un módulo con dos funciones y sus pruebas, ejecutado con `ejecutar_en_sandbox` y sin red.
+
+| Imagen | Tamaño | Construcción de la base | Derivada (dependencias de ejemplo) | Prueba típica: tiempo · memoria pico |
+|---|---|---|---|---|
+| `base` (Python, referencia) | 255 MB | — | — | límites actuales: 3 GB · 120 s |
+| `node` | 532 MB | ≈ 45 s | 9 s (`npm ci`, 2 paquetes) | Vitest + coverage-v8: 1,0 s · 100-130 MB; Stryker (3 mutantes): 3,2 s · 340 MB |
+| `java` | 998 MB | ≈ 200 s | 51 s (`mvn dependency:go-offline`) · 25 s (Gradle) | Maven `verify` (JUnit 5 + JaCoCo): 5,8 s · 300 MB; + PIT: 11,3 s · 340 MB; Gradle `test`: 17,9 s · 790 MB |
+| `navegador` (#186, 03/11/2026) | 1.005.625.362 bytes (959 MiB, `docker image inspect`) | Construcción finalizada; la duración exacta no quedó preservada en un registro fiable | Imagen derivada: 1.006.336.771 bytes | 6,29 s para 6 rutas; pico observado 212,4 MiB y 102 procesos; límite aplicado: 2 CPU, 2 GB y 120 s |
+
+Con eso se fijan los límites por defecto en `config.toml`: **JavaScript y TypeScript, 2 GB y 120 s** (unas 6 veces el pico medido con Stryker; un proyecto Node rara vez necesita más) y **Java, 4 GB y 300 s** (la JVM arranca en cada ejecución, Gradle ya usa casi 0,8 GB con un proyecto mínimo y un proyecto real suma compilación y, con Spring, el contexto). Python no cambia. Si un proyecto real los supera, el equipo los ajusta en `[sandbox.<lenguaje>]`.
+
+Limitaciones conocidas: la derivada de Java copia solo el `pom.xml` o el `build.gradle` de la raíz (los proyectos multimódulo quedan pendientes), y si el proyecto fija plugins de Maven en versiones distintas a las de la imagen, `go-offline` los descarga al construir la derivada.
+
+---
+
+## 8. Modelo GAIA
+
+QAgent se modela con la metodología GAIA (Wooldridge, Jennings y Kinny): primero el **análisis** (modelo de roles y modelo de interacción) y luego el **diseño** (modelo de agentes, de servicios y de conocidos).
+
+Hay **cinco roles** implementados: cuatro con LLM (Planner, Generator, Reviewer y **Explicador**) y un **Coordinador** determinista, que implementa el orquestador. El Explicador (ADR-008, EP-10) actúa después de que el Coordinador cierra los veredictos.
+
+**Notación de las expresiones de vida (liveness):** `x . y` = x seguido de y · `x | y` = x o y · `x*` = cero o más veces · `x+` = una o más veces · `[x]` = opcional. Las actividades internas van en *cursiva* y los protocolos en texto normal.
+
+### 8.1 Modelo de roles
+
+#### Rol: Planner
+
+| Campo | Contenido |
+|---|---|
+| **Descripción** | Analiza la estructura de un módulo y diseña los casos de prueba de cada función pública o endpoint, con su valor esperado. |
+| **Protocolos y actividades** | SolicitarPlan, *LeerEstructura*, *DerivarCasos*, *AsignarOráculo*, *ValidarContrato*, EntregarContrato |
+| **Permisos** | Lee: `estructura.json` del módulo (firmas, tipos, docstrings, ramas, rutas, `llama_a`). Genera: `planner_contract.v2`. No puede ejecutar ni importar el código del usuario. |
+| **Liveness** | `PLANNER = (SolicitarPlan . LeerEstructura . DerivarCasos . AsignarOráculo . ValidarContrato . EntregarContrato)*` |
+| **Safety** | • El contrato valida contra `planner_contract.v2.schema.json`. • Cada valor esperado declara su origen: firma, tipo o docstring de una función, o la declaración de la ruta (`response_model`, `status_code`) de un endpoint. • Nunca ejecuta el código del usuario. |
+
+#### Rol: Generator
+
+| Campo | Contenido |
+|---|---|
+| **Descripción** | Escribe el archivo pytest de una función (llamada directa) o de un endpoint (`TestClient`) a partir de su contrato. En un reintento, corrige el test con el feedback del Reviewer. |
+| **Protocolos y actividades** | SolicitarTest, *RedactarTest*, *IncorporarFeedback*, *ValidarSintaxis*, EntregarTest |
+| **Permisos** | Lee: el contrato de **una** función o endpoint y el feedback del intento anterior. Genera: `generated_test`. No ve el resto del repositorio ni importa el módulo objetivo para calcular valores. |
+| **Liveness** | `GENERATOR = (SolicitarTest . [IncorporarFeedback] . RedactarTest . ValidarSintaxis . EntregarTest)*` |
+| **Safety** | • Las aserciones usan los valores esperados del contrato. • El código pasa `ast.parse` antes de entregarse. • Las funciones del proyecto que aparecen en `llama_a` se simulan con mocks; las dependencias de un endpoint (`Depends`), con `dependency_overrides`. • intento ≤ 3. |
+
+#### Rol: Reviewer / Executor
+
+| Campo | Contenido |
+|---|---|
+| **Descripción** | Ejecuta el test en el sandbox, verifica que las aserciones sean legítimas (sin Assertion Laundering) y decide si se acepta, se reintenta o se detiene. |
+| **Protocolos y actividades** | SolicitarRevisión, *EjecutarEnSandbox*, *CompararAserciones*, *ClasificarFallo*, *ClasificarConLLM*, *CalcularHashError*, *Decidir*, EntregarVeredicto |
+| **Permisos** | Lee: contrato, test actual, test anterior y `coverage.json`. Ejecuta: el test **solo dentro del sandbox** (único rol con permiso de ejecución). Genera: `review_result`. |
+| **Liveness** | `REVIEWER = (SolicitarRevisión . CompararAserciones . EjecutarEnSandbox . [ClasificarFallo . [ClasificarConLLM] . CalcularHashError] . Decidir . EntregarVeredicto)*` |
+| **Safety** | • Nunca acepta un test cuyas aserciones se debilitaron respecto al contrato o al intento anterior (por ejemplo `== 200` → `in (200, 500)`). • Si la aserción falla con el valor esperado del contrato, devuelve `bug_detectado` y **no pide reintento**. • Devuelve `stalled` si intento = 3 o si el hash del error normalizado se repite dos veces seguidas. • Toda ejecución es con `--network none`. |
+
+`CompararAserciones` es el guardrail determinista: compara el AST de las aserciones (`analysis/laundering.py`, sin IA) **antes** de ejecutar. `ClasificarFallo` separa `error_test` de `bug_codigo` con reglas (sección 6.4); solo si las reglas no alcanzan, `ClasificarConLLM` (`_clasificar_con_llm`) pide al LLM una respuesta de ese enum cerrado, con `stalled` como respaldo. Es el único punto donde un LLM interviene en una decisión (ADR-008).
+
+#### Rol: Coordinador (orquestador, sin LLM)
+
+| Campo | Contenido |
+|---|---|
+| **Descripción** | Dirige la corrida: analiza el proyecto, reparte el trabajo a los roles, aplica los límites y registra todo. |
+| **Protocolos y actividades** | SolicitarPlan, SolicitarTest, SolicitarRevisión, NotificarEvento, *AnalizarProyecto*, *OrdenarPorDependencias*, *ControlarGasto*, *RegistrarCorrida* |
+| **Permisos** | Lee: `config.toml`, estructura del proyecto y todos los contratos. Genera: `log.json`, `results.json` y eventos para la interfaz. |
+| **Liveness** | `COORDINADOR = AnalizarProyecto . OrdenarPorDependencias . (SolicitarPlan . (SolicitarTest . SolicitarRevisión)+)+ . RegistrarCorrida` |
+| **Safety** | • Gasto acumulado ≤ tope por corrida. • Todo mensaje entre roles pasa por él (sin broadcast). • Un error o timeout del sandbox termina en fallo controlado. • Un reintento nunca vuelve a solicitar el plan. • Solo solicita una explicación después de escribir `results.json`. |
+
+#### Rol: Explicador (ADR-008, EP-10)
+
+| Campo | Contenido |
+|---|---|
+| **Descripción** | Explica en lenguaje simple por qué un objetivo no terminó en `accept`: qué prometía la especificación, qué pasó y qué revisar. |
+| **Protocolos y actividades** | SolicitarExplicación, *LeerHallazgo*, *AplicarPlantilla*, *[RedactarConLLM]*, *ValidarContrato*, EntregarExplicación |
+| **Permisos** | Lee, solo lectura: contrato del Planner, `review_result` de cada intento y `ResultadoObjetivo`, sin secretos. Genera: `explicaciones.json`. No ejecuta nada, no edita pruebas ni contratos y no llama a otros agentes. |
+| **Liveness** | `EXPLICADOR = (SolicitarExplicación . LeerHallazgo . AplicarPlantilla . [RedactarConLLM] . ValidarContrato . EntregarExplicación)*` |
+| **Safety** | • Nunca cambia ni reinterpreta una decisión, un intento, la cobertura ni `laundering_detectado`. • Si sugiere relajar una aserción o cambiar el valor esperado, la explicación se descarta. • Su `decision` debe coincidir con `results.json`. • Si falla, queda la plantilla. • No corre si la corrida se canceló o se alcanzó el presupuesto. |
+
+#### Rol: Recomendador (ADR-011; reglas #197 e IA opcional #200 implementadas)
+
+| Campo | Contenido |
+|---|---|
+| **Descripción** | Propone en Vista previa qué tipos de prueba soportados conviene ejecutar y en qué orden, antes de iniciar una corrida. |
+| **Protocolos y actividades** | SolicitarRecomendación, *LeerResumenMínimo*, *AplicarReglas*, *[RedactarConLLM]*, *ValidarContrato*, *ValidarCapacidades*, EntregarRecomendación |
+| **Permisos** | Lee: cantidades y tipos de objetivos, rutas HTTP, señal `critical`, lenguajes y capacidades de adaptadores. Genera: `recommendation.v1`. No lee código completo, secretos ni rutas absolutas. |
+| **Liveness** | `RECOMENDADOR = (SolicitarRecomendación . LeerResumenMínimo . AplicarReglas . [RedactarConLLM] . ValidarContrato . ValidarCapacidades . EntregarRecomendación)*` |
+| **Safety** | • Solo recomienda capacidades operativas del adaptador. • No llama a `start_run`. • El usuario confirma o cambia la selección. • No crea oráculos, pruebas ni veredictos. • La IA inválida se descarta completa y se usan las reglas. |
+
+### 8.2 Modelo de interacción
+
+| Protocolo | Iniciador | Respondedor | Entrada | Salida | Propósito |
+|---|---|---|---|---|---|
+| SolicitarPlan | Coordinador | Planner | estructura del módulo | `planner_contract.v2` | Obtener los casos de prueba de un módulo |
+| SolicitarTest | Coordinador | Generator | contrato de 1 función o endpoint (+ feedback) | `generated_test` | Obtener o corregir un test |
+| SolicitarRevisión | Coordinador | Reviewer | contrato + test (+ test anterior) | `review_result` | Ejecutar y validar el test; decidir el siguiente paso |
+| NotificarEvento | Coordinador | Interfaz | — | evento (agente, archivo, función, mensaje, hora) | Mostrar el avance en el Monitor en vivo (HU-09) |
+| SolicitarExplicación | Coordinador (`corrida.py`) | Explicador | hallazgos de solo lectura | `explicaciones.json` | Explicar los objetivos que no se aceptaron (ADR-008) |
+| SolicitarRecomendación (definido) | Vista previa | Recomendador | resumen estático mínimo + capacidades de adaptadores | `recommendation.v1` | Orientar la selección que confirma el usuario antes de `start_run` (ADR-011) |
+
+Los tres primeros protocolos son de **petición-respuesta**: el Coordinador espera la salida antes de continuar. NotificarEvento es asíncrono y no espera respuesta. SolicitarExplicación también es de petición-respuesta, pero tiene su propio tiempo máximo y su fallo no afecta la corrida. SolicitarRecomendación ocurre antes de la corrida: su fallo deja disponible la selección manual y no llama al Coordinador.
+
+### 8.3 Modelo de agentes
+
+| Tipo de agente | Rol que cumple | Instancias por corrida | Modelo |
+|---|---|---|---|
+| PlannerAgent | Planner | 1 | Claude Opus 5.5 (fase de arranque: MiMo-V2.6-Pro, ver ADR-001) |
+| GeneratorAgent | Generator | 1 | MiMo-V2.6-Pro |
+| ReviewerAgent | Reviewer / Executor | 1 | GPT-6 Luna + guardrail determinista |
+| Orquestador | Coordinador | 1 | Sin LLM |
+| ExplicadorAgent | Explicador | 0 o 1 | LLM con el modelo de `[agentes.explicador]` (ADR-001), obligatorio; plantillas sin LLM de respaldo |
+| RecomendadorAgent (definido) | Recomendador | 0 o 1 por Vista previa | Reglas sin LLM; LLM opcional futuro, desactivado por defecto hasta #201 (ADR-011) |
+
+Cada rol lo cumple un solo tipo de agente. Las funciones y endpoints se procesan uno tras otro, así que una instancia de cada agente es suficiente en la Fase 1.
+
+### 8.4 Modelo de servicios
+
+| Servicio | Agente | Entradas | Salidas | Precondición | Postcondición |
+|---|---|---|---|---|---|
+| Planificar módulo | PlannerAgent | estructura del módulo | `planner_contract.v2` | el módulo se analizó sin error de sintaxis | contrato válido contra su schema; cada caso tiene origen del valor esperado |
+| Generar test | GeneratorAgent | contrato de 1 función o endpoint, feedback opcional | `generated_test` | contrato válido; intento ≤ 3 | el código pasa `ast.parse` |
+| Revisar test | ReviewerAgent | contrato, test, test anterior opcional | `review_result` | el sandbox está disponible | decisión en {accept, retry, bug_detectado, stalled}; métricas del intento registradas |
+| Coordinar corrida | Orquestador | ruta del proyecto, perfil | `log.json`, `results.json` | configuración válida y entorno listo (EN-06) | ambos archivos validan contra `run_log.schema.json` |
+| Explicar hallazgos | ExplicadorAgent | hallazgos de solo lectura | `explicaciones.json` | `results.json` escrito; corrida no cancelada; presupuesto disponible | cada explicación valida contra su schema y su `decision` coincide con `results.json` |
+| Recomendar tipos (definido) | RecomendadorAgent | resumen mínimo y capacidades | `recommendation.v1` | análisis estático disponible; todavía no se llamó a `start_run` | schema válido; cada tipo pertenece al conjunto elegible; el usuario conserva la confirmación |
+
+### 8.5 Modelo de conocidos
+
+Quién puede comunicarse con quién. El único nodo conectado con todos es el Orquestador.
+
+```mermaid
+flowchart LR
+    ORQ(("Orquestador"))
+    PL["PlannerAgent"]
+    GE["GeneratorAgent"]
+    RE["ReviewerAgent"]
+    EX["ExplicadorAgent"]
+    RC["RecomendadorAgent<br/>definido"]
+    VP["Vista previa"]
+    ORQ <--> PL
+    ORQ <--> GE
+    ORQ <--> RE
+    ORQ -.-> EX
+    VP -.-> RC
+```
+
+No existe ninguna comunicación directa entre PlannerAgent, GeneratorAgent, ReviewerAgent, ExplicadorAgent y RecomendadorAgent. El Recomendador se comunica con Vista previa antes de que exista una corrida y no conoce al Orquestador.
+
+---
+
+## 9. Contratos JSON
+
+Los schemas completos van en `src/qagent/contracts/` y los valida `tests/test_contracts.py`.
+
+| Contrato | De → a | Campos principales | Schema |
+|---|---|---|---|
+| `estructura.json` | Analizador (o adaptador del lenguaje) → Orquestador / Planner | módulos; funciones (firma, tipos, docstring, n.º de ramas, `llama_a`); endpoints FastAPI (método, ruta, `response_model`, `status_code`, modelo del body); SHA-256 por módulo. Propuesto: campo `lenguaje`, con la misma forma para todos los lenguajes (ADR-009) | salida de EN-02 / EN-14 |
+| `planner_contract.v2` | Planner → Generator (vía orquestador) | módulo, `tipo` (`funcion` \| `endpoint`), función o ruta, firma, `critical`, casos: [id, entrada, valor esperado, origen del valor esperado]. En funciones Python, `tipo_valor_esperado: "tuple"` conserva la semántica de una tupla serializada como array; si falta, sigue siendo lista (#145) | `planner_contract.v2.schema.json` |
+| `planner_contract.v3` (EN-17) | mismo recorrido que v2 | v2 + `lenguaje`, `framework_pruebas` y `framework_app`, con las combinaciones válidas por lenguaje. Un v2 se convierte en memoria sin perder la metadata de tupla. Desde #168 el Planner produce v3 y las specs nuevas se guardan en v3; las v2 guardadas se siguen leyendo sin migrarlas | `planner_contract.v3.schema.json` |
+| `oracle.v1` (EN-18) | documentación JS/TS → validación determinista → futuro Planner JS/TS | lenguaje, objetivo, entrada, comprobación, estado de evidencia y procedencia verificable. El schema valida la forma y una capa determinista contrasta la evidencia con un registro confiable | `oracle.v1.schema.json` |
+| `generated_test` | Generator → Reviewer (vía orquestador) | función o ruta, intento, código pytest, ids de casos cubiertos | `generated_test.schema.json` |
+| `generated_test.v2` (EN-17) | mismo recorrido que v1 | v1 + `lenguaje`, `framework_pruebas` y `archivo` del test | `generated_test.v2.schema.json` |
+| `review_result` | Reviewer → Orquestador | función o ruta, intento, estado del sandbox, cobertura, laundering detectado, `tipo_fallo` (`error_test` \| `bug_codigo`), hash del error, decisión (`accept` \| `retry` \| `bug_detectado` \| `stalled`), feedback, `ejecucion` opcional (EN-17: casos, salida y entorno del sandbox) | `review_result.schema.json` |
+| `detalle.json` | Orquestador → `.qagent/` | por función: contrato, último test y traza; por intento (EN-17): feedback, hash del error, cobertura y `ejecucion` (casos de pytest con archivo, línea, código, esperado y obtenido, salida recortada y entorno) | `detalle.schema.json` |
+| `log.json` / `results.json` | Orquestador → `.qagent/` | modelos usados, perfil, llamadas con tokens por agente, costo, 5 métricas por función o endpoint | `run_log.schema.json` |
+| `explanation.v1` (EN-18, alineado con ADR-008; Agente Explicador, EP-10) | Explicador → validación determinista → `explicaciones.json` → Informes | `version`, `objetivo`, `decision` (eco estricto de `results.json`), `resumen`, `que_se_esperaba`, `que_paso`, `que_hacer`, `origen` y `modelo`. No contiene campos para modificar veredictos ni relajar aserciones | `explanation.v1.schema.json` |
+| `explicaciones.json` (ADR-008) | Explicador → `.qagent/runs/<run_id>/explicaciones.json` | Contenedor de las explicaciones de la corrida (`explanation.v1`), persistido por separado de `results.json` | `explicaciones.schema.json` |
+| `bug_evidence.v1` (#193) | Orquestador → `.qagent/evidencias_bugs/<run_id>/<spec_id>.json` | Evidencia inmutable de una decisión `bug_detectado`: código exacto y su SHA-256, contrato Planner con `firma`, objetivo y corrida de origen. Se guarda separada de `tests/`, que sigue conteniendo solo pruebas aprobadas | `bug_evidence.v1.schema.json` |
+| `run_comparison.v1` (#193, #194, #195) | Comparador determinista → `.qagent/comparaciones/<run_verificacion>/<run_origen>.json` → Resultados, Historial e informes | Comparación por objetivo y prueba entre dos corridas: `corregido`, `sigue_fallando`, `regresion` o `no_comparable`. Un resultado concluyente exige la misma huella de prueba, la misma firma y veredictos confiables. `no_comparable` siempre conserva el motivo y admite metadatos de origen nulos únicamente para representar corridas históricas incompletas sin fabricar evidencia. La presentación comparte una sola proyección de lectura y nunca vuelve a ejecutar ni reclasifica hallazgos | `run_comparison.v1.schema.json` |
+| `recommendation.v1` (#199, Agente Recomendador definido) | Vista previa → validación estructural y de capacidades → usuario | `version`, `origen` (`reglas` \| `ia`) y lista priorizada de `tipo_prueba` + `motivo`. Admite `funcion`, `endpoint` y `mutacion`, sin campos de ejecución; la lista puede ser vacía. El schema no sustituye la validación dinámica contra capacidades del adaptador | `recommendation.v1.schema.json` · ADR-011 |
+
+| `architecture_rules.v1` (#185) | Pantalla Preparar / `.qagent` → adaptador del lenguaje | Reglas de `ciclos_importacion` y `dependencia_prohibida`, con origen y confirmación explícitos; rechaza propiedades de ejecución y patrones inseguros | `architecture_rules.v1.schema.json` · ADR-007 |
+| `architecture_result.v1` (#185) | Sandbox → `.qagent/runs/<run_id>/architecture.json` → informe | Estado global y por regla, herramienta, hallazgos con dependencia/archivo/línea y motivo verificable de `sin_veredicto` | `architecture_result.v1.schema.json` |
+
+**Origen del valor esperado (oráculo):** firma, tipos o docstring de una función (en JS/TS, JSDoc y tipos de TypeScript; en Java, Javadoc y tipos); o la declaración de la ruta (`response_model`, `status_code`, modelos Pydantic) de un endpoint. Nunca el resultado de ejecutar el código.
+
+**Contratos que no cambian:** `planner_contract.v2`, `generated_test` v1, `review_result`, `detalle` y `run_log` se mantienen. Las versiones nuevas se agregan al lado (ADR-007) y la persistencia histórica de `.qagent/` sigue leyéndose igual.
+
+---
+
+## 10. Enfoque de pruebas
+
+Qué tipos de prueba hace QAgent, cómo se clasifican y qué elige el usuario en la pantalla **Configuración de pruebas** (#69).
+
+### 10.1 Nivel, técnica y estrategia
+
+Los nombres de prueba mezclan tres ideas distintas. QAgent las separa así:
+
+| Concepto | Responde a | En QAgent |
+|---|---|---|
+| **Nivel** | Qué se prueba | **Unitarias** (una función aislada; sus llamadas `llama_a` se simulan) y **de API** (un endpoint FastAPI vía HTTP con `TestClient`, simulando `Depends`) |
+| **Técnica** | Cómo se diseñan los casos | Casos normales, **valores límite y casos borde** y casos de error, desde la especificación; **mutación** (mutmut) para medir la calidad de las pruebas |
+| **Estrategia** | Cuándo y cuánto se prueba | **Humo** (comprobación mínima), **Estándar** (completa) y **Regresión** (repetir lo ya aprobado) |
+
+El tipo de caja (negra, gris o blanca) es una propiedad de la **técnica de diseño**, no del nivel ni de la estrategia: depende de qué información se usa para elegir los casos.
+
+### 10.2 Tipo de caja de cada parte
+
+| Parte | Qué recibe quien diseña los casos | Tipo de caja |
+|---|---|---|
+| **Funciones** | Solo nombre, firma y docstring; el Planner no recibe el código (`Planner._crear_prompt`) | **Caja negra** |
+| **Endpoints** | La declaración de la ruta (método, `status_code`, `response_model`, modelos, `Depends`, `HTTPException`) **y el código del manejador** (`Planner.planificar_endpoints`, parámetro `fuente`) | **Caja gris**: el código guía qué casos probar, pero el resultado esperado sale de la declaración |
+| **Profundizar** | El código de las funciones prioritarias, para mutarlo y ver si las pruebas detectan el cambio | **Caja blanca**, como capa **sobre** la prueba Estándar |
+
+Lo que no cambia en ninguna parte es el **oráculo**: el valor esperado sale siempre de la especificación (sección 9), nunca de ejecutar el código. Eso evita que una prueba confirme un bug como si fuera el comportamiento correcto; el Reviewer lo vigila como *Assertion Laundering*.
+
+El análisis estático (EN-02, con tree-sitter desde TA-16) no convierte las pruebas de funciones en caja gris: solo **extrae** la especificación (firma, tipos, docstring) y cuenta las decisiones para proponer qué funciones profundizar (sección 10.4).
+
+### 10.3 Lo que elige el usuario
+
+Preparar agrupa lo que se puede elegir en pestañas **Todas · Caja negra · Caja blanca · Caja gris**, con la clasificación de la sección 10.2 (issue 246). Las pestañas solo filtran qué se ve y nunca cambian lo elegido: **negra** muestra Unitarias (funciones) y el E2E de humo; **gris**, los endpoints; **blanca**, las funciones críticas y su fortaleza (mutación) y las reglas de arquitectura. «¿Qué quieres hacer?» muestra en cada pestaña solo las opciones que tocan ese tipo de caja: Estándar y Humo en negra y gris, Regresión en las tres (puede medir la fortaleza) y el análisis a fondo solo en blanca. Si lo elegido está en otra pestaña, se avisa.
+
+La pantalla Preparar hace dos preguntas. «¿Qué quieres hacer?» elige la estrategia y se traduce al perfil que recibe `start_run` (`perfilDeEleccion` en `config-pruebas.js`). «Tipos de prueba» elige el nivel (Unitarias, Endpoints API o ambos) y se combina con cualquier estrategia:
+
+| ¿Qué quieres hacer? | Condición | Perfil |
+|---|---|---|
+| Generar pruebas nuevas (opción por defecto) | — | `std` |
+| Revisión rápida (humo) | — | `humo` |
+| Volver a correr las guardadas | Casilla «Medir la fortaleza de las críticas» desmarcada | `reg` |
+| Volver a correr las guardadas | Casilla marcada y al menos una función crítica seleccionada con prueba guardada válida | `reg_deep` |
+| Análisis a fondo de críticas | Con funciones o endpoints críticos marcados | `deep` |
+| Análisis a fondo de críticas | Sin críticas marcadas | `std` |
+
+Humo solo se usa si el usuario lo elige: QAgent no lo activa por su cuenta, por ejemplo en la primera corrida de un proyecto (#133). Con Humo, las funciones críticas y la fortaleza de las pruebas se muestran desactivadas, con su explicación.
+
+El análisis a fondo no se ofrece con Humo porque añade la capa de caja blanca encima de las pruebas normales: la mutación mide qué tan buenas son las pruebas que ya existen, así que necesita una base completa. Con Humo (un solo caso por objetivo) casi todos los mutantes sobrevivirían y el resultado no aportaría información. «Volver a correr las guardadas» tampoco es un nivel de profundidad: es otra acción, que vuelve a ejecutar sin IA las pruebas aprobadas cuyo código no cambió (HU-25).
+
+Desde la issue #150, «Volver a correr las guardadas» vuelve a ofrecer la casilla opcional «Medir la fortaleza de las críticas». La decisión de recuperarla como una opción interna de Regresión —no como un quinto modo— fue comunicada por el responsable el 28/10/2026; su registro formal en GitHub queda pendiente. Desmarcada conserva `reg`; marcada envía `reg_deep` a `start_run`. Cambiar de modo o perder la elegibilidad la desmarca para que una regresión normal nunca active mutación de forma silenciosa.
+
+«Verificar corrección» (#194) es una acción distinta disponible sobre una corrida concreta del Historial. Recupera de esa corrida el código exacto de las pruebas aprobadas y las evidencias inmutables `bug_detectado`, confirma por análisis estático que el objetivo mantiene identidad y firma, y vuelve a ejecutarlas sin regeneración ni LLM dentro del sandbox. A diferencia de HU-25, permite que cambie el cuerpo de la función: su propósito es comprobar la corrección. Un objetivo eliminado, renombrado, con firma distinta, no analizable o sin evidencia suficiente se registra como `no_comparable` sin ejecutarse. El resultado queda en una corrida `verify_fix` y en un contrato `run_comparison.v1`. Desde #195, Resultados, Historial y los informes MD, HTML, JSON y PDF leen ese contrato persistido mediante la misma vista; muestran la corrida de origen, antes/ahora y los cuatro estados sin recalcular decisiones ni ejecutar el proyecto.
+
+Al repetir con `reg_deep`, Profundizar (#70) mide sin gastar tokens qué tan fuertes son las pruebas que ya están guardadas, por ejemplo las que se aprobaron con Estándar. Solo habilitan la casilla las funciones críticas seleccionadas que tienen hoy una prueba guardada vigente (`objetivos_repetibles`): las que requieren corrida nueva, tienen metadatos incompletos, fallaron o solo comprueban un `TypeError` trivial de firma (#149) no cuentan. El backend vuelve a validar la selección antes de iniciar. La casilla viene desmarcada, porque mutmut añade tiempo de CPU aunque no realiza llamadas LLM.
+
+### 10.4 Por qué Profundizar solo en funciones prioritarias
+
+- **Regla del alcance:** mutmut solo se ejecuta sobre funciones `critical: true`, nunca sobre el repositorio completo (RN-04).
+- **Costo:** por cada función, mutmut crea decenas de versiones alteradas del código y ejecuta las pruebas contra cada una; aplicarlo a todo puede llevar horas. El tiempo máximo por función se fija en `[mutacion]` de `config.toml`.
+- **Cálculo:** Mutation Score = mutantes detectados ÷ (detectados + sobrevivientes) × 100. Un mutante que agota el tiempo cuenta como detectado; uno sin pruebas que lo cubran, como sobreviviente. La meta es 60 % (ADR-001).
+- **Cómo se ejecuta (`sandbox/mutacion.py`):** las pruebas aprobadas se copian dentro de la copia del proyecto antes de llamar a mutmut. mutmut identifica las pruebas con rutas relativas; si quedan fuera del proyecto no las encuentra y cuenta cada mutante como «killed», lo que daría un 100 % falso. Si el proyecto ya tiene `[tool.mutmut]` en `pyproject.toml`, QAgent no la sobrescribe y no ejecuta la mutación.
+- **Reutilización (#70):** cada resultado con puntuación se guarda en `.qagent/mutacion/<spec>.json` con la huella de la función (árbol de tree-sitter desde TA-16) y la huella de las pruebas usadas (todas las aprobadas del módulo, porque cualquiera puede detectar un mutante). Si ninguna de las dos cambió, la siguiente corrida con Profundizar reutiliza el resultado sin ejecutar mutmut y el informe dice de qué corrida salió. Un tiempo agotado o un error no se guardan: se vuelven a intentar.
+- **Pruebas basadas en riesgo:** el esfuerzo se concentra donde un fallo es más probable o más grave. Ninguna función se deja sin probar: todas reciben su prueba Estándar.
+
+QAgent propone como prioritaria toda función con al menos una decisión (`if`/`elif`, ternario, `for`, `while`, `except`, `case` o `if` de comprensión; `contar_ramas` en `analysis/analyzer.py`). Una función sin decisiones tiene un solo camino, así que profundizar aporta poco, pero el usuario puede marcarla igual si es importante (por ejemplo, un cálculo de dinero), porque la mutación también cambia operadores y constantes (HU-06).
+
+### 10.5 Estado actual
+
+| Pieza | Estado | Ítem |
+|---|---|---|
+| Pruebas unitarias y de API, regresión sin IA | Implementado | HU-27 · HU-25 |
+| Pantalla de configuración como opciones | Implementado | #69 |
+| Humo con un solo caso por objetivo | Implementado: un caso normal por objetivo, sin exigir ramas; se elige en Preparar como «Revisión rápida (humo)» | #75 · #133 |
+| Marcas de función prioritaria hasta la corrida | Implementado: la selección envía las marcas y el spec reutilizado toma la marca actual | HU-06 |
+| Mutación (Profundizar) | Implementado en el perfil Profundo: mutmut en el sandbox solo sobre las funciones críticas aprobadas; Mutation Score y sobrevivientes en `results.json` y en el informe | EN-09 |
+| Mutación al repetir pruebas guardadas | Implementado (`reg_deep`) y disponible en Preparar mediante una casilla de Regresión: sin IA, solo sobre las críticas con prueba guardada vigente, con validación backend y reutilización del resultado si nada cambió | #70 · #150 |
+| Mutación en endpoints | Pendiente | Issue de endpoints con caja blanca |
+| Categoría de cada caso (normal / límite / error) | Pendiente | Issue «Feat: categoría de cada caso de prueba» |
+
+### 10.6 Nuevos tipos de prueba del Sprint 2
+
+Las categorías actuales se aplican a cada lenguaje. **Caja negra:** el valor esperado sale del contrato (docstring, JSDoc, Javadoc, tipos). **Caja blanca:** se leen las ramas del código para elegir entradas, nunca para decidir el resultado. Prioridades tentativas del plan del Sprint 2, a confirmar en el Sprint Planning:
+
+| Tipo de prueba | Cómo se prueba | Oráculo | Prioridad | Ítem |
+|---|---|---|---|---|
+| Unitarias TS/JS puro (utilidades, servicios, lógica) | Vitest en `qagent-sandbox:node` | JSDoc y tipos | Must | EP-11a |
+| Unitarias Java y controladores Spring | JUnit 5 + Mockito; controladores con MockMvc (análogo a `TestClient`), sin `@SpringBootTest` completo | Javadoc y tipos | Must | EP-12a |
+| Componentes React | Vitest + Testing Library + jsdom | Tipos de las props; JSDoc si existe | Should | EP-11b |
+| Servicios Angular / componentes Angular | Servicios como TS puro / TestBed (requiere compilar el proyecto) | Tipos y contratos de servicios | Should / Could | EP-11d |
+| Mutación en críticas TS y Java | Stryker / PIT, solo sobre funciones `critical: true` | El de las pruebas aprobadas | Should | EP-11c, EP-12b |
+| Pruebas de arquitectura | import-linter (Python), dependency-cruiser (JS/TS), ArchUnit (Java) | Reglas universales (sin ciclos) y reglas **declaradas por el usuario**; el LLM puede proponer reglas, pero solo se ejecutan las confirmadas | Should | EP-13a |
+| E2E de humo | Playwright con Chromium headless en `qagent-sandbox:navegador`, la app arranca dentro del sandbox | Rutas detectadas por el análisis y ausencia de errores HTTP o de consola; los flujos completos solo si el usuario los declara | Should | EP-13b |
+| Astro, E2E de flujos completos, carga y estrés | — | — | Fuera de este sprint | — |
+
+**Regla para frameworks no soportados:** el framework se detecta por `package.json` (`react`, `@angular/core`, `astro`). Si no tiene soporte, QAgent prueba solo los archivos de lógica `.ts`/`.js` y el informe marca «componentes no soportados». Así el producto funciona en cualquier proyecto aunque el soporte del framework llegue después.
+
+#### Componentes React implementados (#171)
+
+`analizar()` de JavaScript y TypeScript separa los **componentes**: funciones exportadas con nombre en PascalCase que devuelven JSX (`.jsx`/`.tsx`). Sus props salen del tipo de TypeScript del mismo archivo (`interface`, `type`, tipo en línea o `React.FC<Props>`) o del JSDoc (`@param {string} props.etiqueta`), con opcionales, valores por defecto y eventos (`onX` de tipo función). Todo es estático con tree-sitter. Si `package.json` declara `react`, van a `componentes` y son objetivos de tipo `componente`; si no, a `componentes_no_soportados`.
+
+- **Contrato:** `planner_contract.v3` admite `tipo: "componente"` con `framework_app: "react"` (solo JS/TS, Vitest, nunca `critical`). Cada caso es `{props, interacciones}` → `{renderiza, visible, ausente, llamadas}`; los elementos se buscan por rol (con nombre accesible) o por texto.
+- **Oráculo (Planner, sin IA):** con origen `tipo` un caso solo afirma que el componente renderiza. Con origen `docstring` puede esperar textos visibles citados en el JSDoc o que sean el valor de una prop documentada, y llamadas a eventos documentados con una interacción que las provoque. Un componente sin props tipadas ni JSDoc no llega al modelo: queda omitido como «sin resultado esperado verificable».
+- **Generator y Reviewer:** plantilla Testing Library (`render`, `screen.getByRole`/`getByText`, `fireEvent`, `vi.fn()`) en `generado.test.tsx`/`.jsx`, que empieza con `// @vitest-environment jsdom`. El oráculo rechaza clases CSS, `querySelector`, `container` e instantáneas. El guardrail de laundering es el de Vitest y conoce el rigor de los matchers de jest-dom.
+- **Sandbox:** `qagent-sandbox:node` trae jsdom 30.1.3 y Testing Library (`react` 16.3.3, `dom` 10.4.2, `jest-dom` 7.0.1). React es el del proyecto: la copia que npm instala como dependencia «peer» se cambia por un enlace a `/work/node_modules`, porque dos copias rompen los hooks. Vitest corre con raíz `/work` (proyecto y pruebas), sin red y con la raíz de solo lectura.
+- **Frameworks no soportados:** con Angular, Astro, Vue, Svelte, Solid o Preact (o JSX sin React), solo se prueba la lógica y el informe lista los componentes como omitidos con «Componentes no soportados». Fuera de alcance: componentes de clase, `memo`/`forwardRef`, props importadas de otro archivo y `propTypes`.
+
+#### Integración interna implementada (#245, ADR-014; piloto en Python)
+
+Prueba una función **raíz** junto con las funciones internas puras que llama, ejecutadas de verdad en el sandbox sin red. Solo Python. No reabre la «integración contra servicios reales», que sigue fuera de alcance: lo que sale del proyecto se simula.
+
+- **Candidatas y cadenas (estático, 0 tokens):** `qagent.analysis.integracion` parte de `llama_a` y arma la cadena (raíz más internas) hasta `profundidad_max` niveles y `max_funciones` funciones (`[integracion]` de `config.toml`; si hay más se recorta y se marca `recortada`). Una función interna **de efecto** (usa red, base de datos, archivos, subprocesos, hora o azar, o `open`/`input`) no entra en la cadena: se simula. Ante la duda se trata como de efecto. Sin ninguna interna pura, la función no es candidata y el tipo no se ofrece. `PythonAdapter.analizar()` agrega `integraciones` a los módulos que tienen candidatas.
+- **Contrato:** `planner_contract.v3` con `tipo: "integracion"`, `objetivo` `integracion_<raíz>` (así no choca con la unitaria de la misma función), `cadena` (la raíz primero), `efectos` y `llama_a` solo con las internas de efecto a simular. Nunca `critical`.
+- **Oráculo:** sin llamada nueva al Planner. El orquestador deriva el contrato del unitario de la raíz (mismos casos y mismo oráculo, de su firma y documentación). Sin contrato unitario verificable no hay integración: queda omitida con su motivo. Una raíz elegida solo para integrar se planifica pero no se ejecuta como unitaria (`solo_integracion`).
+- **Generator y Reviewer:** el prompt de `python_generacion` pide llamar a la raíz sin simular la cadena y simular solo lo externo. El guardrail contra Assertion Laundering es el de Python, apuntando a la raíz; la cobertura se mide sobre la raíz (`objetivo_de_cobertura`). Una integración que falla es un hallazgo, no se relaja.
+- **Preparar y Recomendador:** casilla «Integración interna» (apagada por defecto, aparece si hay candidatas); entra en la estimación y se envía como `integraciones` (raíces) en la selección. El Recomendador (reglas) la propone solo si hay cadenas, con su motivo, después de las unitarias.
+- **Medición:** `bench/integracion/` trae un defecto que solo se ve al combinar funciones (`total_del_pedido`). La comparación con las unitarias necesita Docker y un modelo real: está pendiente (ver su `README.md`). Si no encuentra nada que las unitarias no encuentren, el tipo debe quedar fuera por defecto; hoy ya nunca se activa sin elegirlo.
+
+#### Contrato inferido para funciones sin docstring (#275, ADR-016; piloto en Python)
+
+Una función sin docstring cuyo resultado la firma y los tipos no determinan ya no se omite: el Planner hace un **segundo paso** y la infiere leyendo el proyecto, sin ejecutarlo.
+
+- **Contexto estático (0 tokens):** `qagent.analysis.inferencia` junta, por función, su cuerpo, las dependencias del grafo (ADR-012), los **llamadores** (índice inverso de `llama_a`) y los tests existentes que la mencionan. El grafo y el contexto, que antes solo llegaban al Generator, ahora también llegan al Planner. `LanguageAdapter.proveedor_inferencia` lo entrega; solo Python lo implementa.
+- **Contrato:** `planner_contract.v3` agrega `origen: "inferido"` y `evidencia` (obligatoria con ese origen, prohibida con otro). Una evidencia solo vale si QAgent la entregó (`cuerpo`, `dependencia:…`, `llamador:…`, `test_existente:…`); el Planner descarta el caso que cita otra. `origen: inferido` fuera de este paso se rechaza.
+- **Qué se infiere:** solo lo que el primer paso omitió y no tiene docstring, hasta `max_funciones_por_modulo` por módulo (`[inferencia]` de `config.toml`, que también permite apagarlo con `activa = false`). Lo que no alcanza queda omitido con un motivo accionable.
+- **Honestidad del resultado:** cada objetivo sale con `respaldo` (`contrato` o `inferido`) y el resumen del reporte separa «N con contrato · M de regresión sin contrato documentado». Un fallo de una prueba inferida es un **hallazgo a revisar**, no un bug confirmado; el Explicador lo dice así. La interfaz muestra la marca «Regresión · contrato inferido» con la evidencia.
+- **Orquestador sin cambios:** sigue determinista (ADR-008). El valor esperado nunca sale de ejecutar el código.
+- **Preparar:** la casilla «Inferir funciones sin docstring» (su valor inicial es `[inferencia] activa`) muestra cuántas funciones entran y estima sus tokens aparte; se envía a `start_run(inferir=…)`.
+- **Revisión opcional:** con «Revisar contratos inferidos» la corrida se detiene tras planificar el módulo (`Orquestador._revisar_inferidos`, fuera del límite de tiempo de los agentes): Python envía `revision_inferidos`, la persona acepta o descarta cada función en el modal y `responder_revision_inferidos` reanuda la corrida. Lo descartado queda omitido con su motivo; detener la corrida descarta lo pendiente.
+- **Pendiente:** editar un contrato inferido desde el modal, y la medición con `bench/sin_docstring/` (necesita Docker y un modelo real).
+
+#### Verificación arquitectónica implementada (#185)
+
+La pantalla **Preparar** ofrece una acción independiente de los perfiles `std`, `humo`,
+`reg`, `reg_deep` y `verify_fix`. Solo se ejecuta cuando la persona la solicita. No
+genera pytest ni llama al Planner, Generator, Reviewer, Explicador o Recomendador.
+
+- `architecture_rules.v1` representa reglas de ciclos o dependencias prohibidas. La
+  regla `universal-sin-ciclos` se inyecta siempre en memoria. Las reglas declaradas se
+  guardan, después de validar, en `.qagent/reglas_arquitectura.json` mediante escritura
+  atómica. Un proyecto anterior sin ese archivo no se modifica.
+- Una sugerencia con `origen: ia` solo se vuelve ejecutable con `confirmada: true`.
+  #185 no agrega llamadas LLM ni un flujo de sugerencias automático.
+- `LanguageAdapter.traducir_reglas_arquitectura()` produce configuraciones controladas.
+  Python usa import-linter 2.15; JavaScript y TypeScript, dependency-cruiser 18.6.0;
+  Java, ArchUnit 1.5.1 sobre clases compiladas únicamente dentro del contenedor.
+- La ejecución reutiliza `ejecutar_en_sandbox`: copia temporal, `network_mode=none`,
+  límites de CPU/memoria/tiempo, filesystem de solo lectura, `cap_drop=ALL` y limpieza
+  del contenedor. Las imágenes contienen las herramientas con versiones fijas; nunca
+  se usa `npx` ni se instala durante la evaluación.
+- `architecture_result.v1` distingue `cumple`, `incumple`, `sin_veredicto` y la regla
+  `no_ejecutada`. Los hallazgos conservan origen, destino, archivo y una línea solo
+  cuando se pudo verificar. La corrida queda en `.qagent/runs/<run_id>/architecture.json`
+  y puede exportarse como JSON, Markdown, HTML o PDF.
+- Un timeout, una imagen o herramienta ausente, una resolución incompleta, un fallo de
+  compilación o una salida ilegible produce `sin_veredicto`; nunca un falso cumplimiento.
+  Un incumplimiento se conserva como hallazgo y no relaja ni elimina reglas.
+
+Límite explícito de Java: ArchUnit necesita compilar las fuentes. Si el proyecto exige
+dependencias que la imagen no tiene o no declara paquetes comparables, la regla queda
+sin veredicto.
+
+#### Humo E2E implementado (#186)
+
+La pantalla **Preparar** ofrece una acción voluntaria separada de los perfiles existentes.
+`LanguageAdapter.rutas_web()` detecta únicamente rutas literales justificadas por Express
+o la entrada de Vite. `.qagent/e2e.json` permite declarar rutas y un comando estructurado;
+no acepta shells ni código en línea. Una ruta dinámica (`:id`, `[id]`, `{id}`) queda sin
+veredicto salvo que la persona declare una ruta concreta. Endpoints API, autenticación y
+archivos estáticos no se convierten en páginas.
+
+El controlador y la aplicación viven en el mismo contenedor. La aplicación escucha en
+`127.0.0.1`; Docker usa `network_mode=none`, y Playwright intercepta solicitudes y bloquea
+cualquier host o puerto distinto del loopback autorizado, incluidos subrecursos,
+redirecciones y `fetch`. El contenedor se ejecuta como `pwuser`, con `cap_drop=ALL`,
+`no-new-privileges`, filesystem raíz de solo lectura, 128 procesos como máximo y `/tmp`
+limitado. No se añade `SYS_ADMIN`, modo privilegiado, socket Docker ni secretos del host.
+
+Por ruta se registra HTTP, URL final, `console.error`, `pageerror`, fallos de solicitudes,
+contenido visible y duración. HTTP 4xx/5xx, navegación fallida, salida del origen, errores
+JavaScript o una página vacía producen `falla`; antes de cerrar la página se guarda un PNG
+auténtico. Un fallo de arranque, timeout, OOM, navegador ausente o resultado ilegible
+produce `sin_veredicto`, conserva el log de arranque y no atribuye fallos a páginas que no
+se visitaron. `e2e_result.v1` se escribe atómicamente en
+`.qagent/runs/<run_id>/e2e.json`; Historial e informes JSON/Markdown/HTML lo leen sin
+confundirlo con `results.json`. Todo el flujo es determinista y registra cero tokens.
+
+El alcance operativo validado es Express y Vite en JavaScript/TypeScript. No se generan
+credenciales, formularios, compras ni flujos de negocio; los flujos completos siguen fuera
+de alcance hasta que exista una declaración y un contrato seguro específico.
+
+---
+
+## 11. Stack tecnológico
+
+| Capa | Tecnología | Uso | Ítem |
+|---|---|---|---|
+| Presentación | ![HTML5](https://img.shields.io/badge/HTML5-E34F26?logo=html5&logoColor=white) ![CSS](https://img.shields.io/badge/CSS-663399?logo=css&logoColor=white) ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black) | Pantallas del demo | EN-08 |
+| Presentación | pywebview | Ventana de escritorio y puente JS ↔ Python | EN-08 |
+| Backend | ![Python](https://img.shields.io/badge/Python_3.10+-3776AB?logo=python&logoColor=white) | Orquestador, agentes y servicios | EN-04 |
+| Análisis | tree-sitter con la gramática de Python | Funciones, rutas FastAPI y `llama_a`, sin ejecutar código | EN-02 · EN-14 · TA-16 |
+| Análisis (propuesto) | tree-sitter con gramáticas de JavaScript, TypeScript y Java | Lo mismo para los lenguajes nuevos, con consultas `.scm` por lenguaje | ADR-009 · EP-11a · EP-12a |
+| Configuración | ![TOML](https://img.shields.io/badge/TOML-9C4121?logo=toml&logoColor=white) `tomllib` | `config.toml` | EN-06 |
+| IA | ![Anthropic](https://img.shields.io/badge/Claude_Opus_5.5-191919?logo=anthropic&logoColor=white) | Planner | SPK-01 |
+| IA | ![Xiaomi](https://img.shields.io/badge/MiMo--V2.6--Pro-FF6900?logo=xiaomi&logoColor=white) | Generator (y Planner en la fase de arranque) | SPK-01 |
+| IA | ![GPT-6 Luna](https://img.shields.io/badge/GPT--6_Luna-412991) | Reviewer | SPK-01 |
+| Sandbox | ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white) | Contenedor aislado | EN-03 |
+| Métricas | ![pytest](https://img.shields.io/badge/pytest-0A9EDC?logo=pytest&logoColor=white) coverage.py · mutmut | Ejecución, cobertura y Mutation Score | EN-03 · EN-09 |
+| Pruebas de endpoints | ![FastAPI](https://img.shields.io/badge/FastAPI_TestClient-009688?logo=fastapi&logoColor=white) httpx | Probar endpoints sin levantar servidor | EN-15 |
+| Pruebas JS/TS (propuesto) | Vitest · @vitest/coverage-v8 · Stryker · Testing Library + jsdom | Ejecución, cobertura, mutación y componentes React | EP-11a a EP-11d |
+| Pruebas Java (propuesto) | JUnit 5 · Mockito · MockMvc · JaCoCo · PIT · Maven/Gradle sin red | Ejecución, cobertura, mutación y controladores Spring | EP-12a · EP-12b |
+| E2E y arquitectura (propuesto) | Playwright · import-linter · dependency-cruiser · ArchUnit | E2E de humo y reglas de estructura | EP-13a · EP-13b |
+| Contratos | ![JSON](https://img.shields.io/badge/JSON_Schema-000000?logo=json&logoColor=white) `jsonschema` | Validación de contratos y logs | EN-01 |
+| Equipo | ![Git](https://img.shields.io/badge/Git-F05032?logo=git&logoColor=white) ![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white) ![Ruff](https://img.shields.io/badge/Ruff-D7FF64?logo=ruff&logoColor=black) | Versiones, PRs y lint | — |
+
+---
+
+## 12. Decisiones de arquitectura
+
+| Decisión | Motivo | Registro |
+|---|---|---|
+| Monolito modular de escritorio | Un usuario por instalación, sin servidor ni despliegue; el código del usuario no sale de su PC | Sección 1 |
+| pywebview con `js_api` | Reusar el HTML del demo sin levantar un servidor HTTP | Sección 1 |
+| Sandbox Docker sin red | Las pruebas generadas son código desconocido; se aíslan de archivos, dependencias y red | Sección 7 |
+| Orquestador determinista, sin LLM; el único punto híbrido es `_clasificar_con_llm` del Reviewer | Reglas fijas (reintentos, topes); métricas reproducibles; 0 tokens; un LLM coordinador no tendría nada que decidir que las reglas no decidan | Sección 8 · ADR-008 |
+| Un modelo por agente | Inteligencia solo donde hay ambigüedad; el Planner concentra el gasto | ADR-001 |
+| Análisis con tree-sitter para Python, JS/TS y Java; sin Graphify | 0 tokens, determinista, ~3 ms por archivo y sin Node ni JDK en la PC del usuario | ADR-002 · ADR-009 · ADR-012 |
+| Grafo de dependencias inter-archivo con tree-sitter (`grafo_imports`); sin Graphify | 0 tokens de análisis, ~27–36 ms, eleva aprobación del 60 % al 100 % en proyectos modulares; sin subprocesos ni binarios en la PC del usuario | SPK-196 · ADR-012 |
+| Frontend separado, un componente por pantalla, sin bundler ni módulos ES | Cambios por pantalla en lugar de un archivo de 2000 líneas; funciona con `file://` y pywebview sin servidor propio; sin Node ni compilación | ADR-003 |
+| Pruebas de endpoints FastAPI con `TestClient` | Reutiliza el sandbox, pytest y las 5 métricas; integración contra servicios reales y carga siguen fuera; E2E solo de humo, en el Sprint 2 | Backlog EP-09 · ADR-010 |
+| Reintentos solo Generator → Reviewer; bug detectado no se reintenta; orden topológico por `llama_a` | Evita rehacer el plan (el agente más caro) y la cascada de fallos entre funciones | Sección 6.4 |
+| Datos en archivos JSON | Viajan con el proyecto; no requiere base de datos | EN-07 |
+| Profundizar (mutación) como capa sobre Estándar, solo en funciones prioritarias | La mutación mide pruebas que ya existen y es costosa; se concentra donde hay más riesgo | Sección 10 |
+| Adaptadores por lenguaje y contratos versionados, sin tocar los existentes | Incorporar JS/TS y Java sin duplicar agentes ni romper las specs guardadas | ADR-007 |
+| Explicador como etapa posterior al veredicto, de solo lectura y con plantillas de respaldo | Aporta explicaciones para usuarios no técnicos sin comprometer resultados ni reglas | ADR-008 |
+| Arquitectura y ampliación de alcance del Sprint 2 | Un solo modelo de referencia para cinco integrantes que trabajan en paralelo | ADR-010 |
+| Recomendador antes de la corrida, con reglas como autoridad y LLM opcional acotado | Orienta la selección sin dar autoridad de ejecución a un LLM ni ofrecer tipos no soportados | ADR-011 |
+
+---
+
+## 13. Sprint 2: lo que no cambia y pendientes
+
+### 13.1 Lo que no cambia
+
+| Regla | Dónde se cumple |
+|---|---|
+| El orquestador no usa LLM y decide con reglas | `orchestrator/orquestador.py`, `estados.py` (ADR-008) |
+| Máximo 3 intentos por objetivo; un reintento nunca vuelve al Planner | `MAX_INTENTOS_CONTRATO`, `decidir_corte()`, sección 6.3 |
+| Corte por hash de error repetido | `decidir_corte()`, `sandbox/normalizacion.py` |
+| Tope de gasto por corrida y límite de tokens | `corrida.py`, `TokenTracker` |
+| Toda ejecución en Docker, sin red al ejecutar | `sandbox/ejecucion.py`, sección 7 |
+| El valor esperado nunca sale de ejecutar el código | Planner y contratos, sección 9 |
+| Assertion Laundering detectado sin IA, antes de ejecutar | `analysis/laundering.py` (Python); un guardrail equivalente por adaptador en JS/TS y Java |
+| Mutación solo en funciones `critical: true` | Sección 10.4 |
+| Los agentes no se llaman entre sí | Sección 8.5 |
+| Las 5 métricas por prueba, ahora con la columna lenguaje | `run_log.schema.json` |
+| Cada cambio de alcance, de modelo o de dependencia se registra en un ADR | `docs/decisiones/` |
+
+### 13.2 Decisiones abiertas
+
+Responsables sugeridos en el plan del Sprint 2, a confirmar en el Sprint Planning.
+
+| Decisión o tarea abierta | Responsable sugerido | Referencia |
+|---|---|---|
+| Integrar `explanation.v1` con el Agente Explicador y su persistencia separada (`explicaciones.json`); contrato y schema alineados con ADR-008 (**Resuelto**) | Rodríguez Malca, Rodrigo | ADR-008 · EN-18 · EP-10 |
+| Si el Explicador propone parches y el orquestador los verifica en el sandbox (necesita su propia decisión) | Rodríguez Malca, Rodrigo, con el equipo | ADR-008 |
+| Medir el Explicador con un LLM real (tokens, costo, latencia y calidad) antes de activarlo por defecto (**Resuelto**: #167 midió y EP-10 #172 lo dejó obligatorio con `modo = "ia"`) | Rodríguez Malca, Rodrigo y Sanchez Vargas, Adrián | ADR-008, paso 5 |
+| Conectar el registro de adaptadores a la corrida y usar `planner_contract.v3` en el flujo (**Resuelto**, #168) | Oncoy Patricio, Angel | ADR-007 |
+| Agregar tree-sitter y las gramáticas de JS/TS; analizador y guardrail de `expect` | Castillo Pezo, Mateo | ADR-009 · EP-11a |
+| Adaptador de Java completo y banco equivalente en los 3 lenguajes (brecha B5) | Nuevo integrante | ADR-009 · EP-12a |
+| Imágenes `node`, `java` y `navegador` del sandbox y límites medidos (**Resuelto**, #169 y #186) | Sanchez Vargas, Adrián · bel001 | Sección 7 |
+| Migrar el analizador de Python a tree-sitter, solo si da la misma estructura que `analizar_proyecto()` | Hecho (TA-16, #154) | ADR-009 |
+| Versionar en `bench/` los bancos y scripts de medición de SPK-03 y SPK-04 (**Resuelto**) | Sanchez Vargas, Adrián y Castillo Pezo, Mateo | ADR-008 · ADR-009 |
+| Implementar las reglas del Recomendador y la declaración de capacidades por adaptador; integrar la confirmación en Vista previa | bel001 | ADR-011 · #197 |
+| Implementar y medir el modo IA opcional antes de considerar un cambio del modo predeterminado | bel001, con revisión del equipo | ADR-011 · #200 · #201 |
+| Aprobar el ADR-014 y, solo después, implementar las pruebas de integración interna (piloto en Python) | Oncoy Patricio, Angel, con aprobación del equipo | ADR-014 · #245 |
+
+## 14. Aprobación
+
+Criterio 5 de EN-01 y criterio de aprobación de EN-20: aprobado por los integrantes del equipo (se marca al aprobar el PR).
+
+- [ ] Castillo Pezo, Mateo
+- [ ] Oncoy Patricio, Angel
+- [ ] Rodríguez Malca, Rodrigo
+- [ ] Sanchez Vargas, Adrián
+- [ ] Nuevo integrante (Java)

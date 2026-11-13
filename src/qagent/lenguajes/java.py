@@ -1,0 +1,677 @@
+"""Análisis Java con tree-sitter y generación JUnit 5 con guardrail (#132, #181, #184).
+
+Solo lee fuentes UTF-8: no importa, compila ni ejecuta el proyecto analizado.
+Extrae clases, constructores, métodos públicos, Javadoc y decisiones (#181). Excluye
+src/test, carpetas generadas y enlaces simbólicos. Resuelve llamadas explícitas
+del proyecto sin inferir tipos ni despacho dinámico. Extrae declaraciones de
+endpoints Spring (#183); no admite sobrecargas. La generación usa el contrato del Planner y el
+guardrail valida aserciones sin ejecutar Java ni consultar IA. Lee informes JUnit
+XML y ejecuta Maven/JUnit/JaCoCo y mutación PIT acotada exclusivamente dentro del
+sandbox (#182, #180).
+"""
+
+from __future__ import annotations
+
+import os
+from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+from tree_sitter import Node
+
+from qagent.analysis.analyzer import calcular_huella
+from qagent.lenguajes.base import (
+    AdaptadorEnDesarrollo,
+    Clasificacion,
+    ComandoSandbox,
+    ComparacionAserciones,
+    EntornoSandbox,
+    Estructura,
+    PlanArquitectura,
+    ReglasPlanificacion,
+    ReglasRevision,
+)
+from qagent.lenguajes.java_cobertura import leer_jacoco
+from qagent.lenguajes.java_estructura import contar_decisiones, desglosar_javadoc
+from qagent.lenguajes.java_junit import interpretar_junit_java
+from qagent.lenguajes.java_llamadas import agregar_llamadas
+from qagent.lenguajes.java_spring import extraer_endpoints
+from qagent.lenguajes.registro import listar_archivos
+from qagent.lenguajes.treesitter import extraer_errores_sintaxis, obtener_parser
+from qagent.sandbox.ejecucion import ARCHIVO_JUNIT, DIR_SALIDA, DIR_TESTS
+from qagent.sandbox.modelos import IMAGEN_JAVA, ResultadoSandbox
+
+if TYPE_CHECKING:
+    from qagent.sandbox.mutacion import ResultadoMutacion
+
+#: Herramientas que trae ``qagent-sandbox:java`` (``sandbox/Dockerfile.java``).
+PAQUETES_JAVA = ("maven", "gradle", "junit-jupiter", "jacoco", "pitest", "archunit")
+
+
+def _texto(nodo: Node | None) -> str | None:
+    """Devuelve el texto UTF-8 literal de un nodo, o None cuando no existe."""
+    return nodo.text.decode("utf-8") if nodo is not None else None
+
+
+def _javadoc(nodo: Node) -> str | None:
+    """Devuelve solo el comentario Javadoc inmediatamente anterior, sin inferirlo."""
+    anterior = nodo.prev_named_sibling
+    texto = _texto(anterior)
+    if (
+        anterior is not None
+        and anterior.type == "block_comment"
+        and texto.startswith("/**")
+    ):
+        return texto
+    return None
+
+
+def _parametros(nodo: Node) -> list[dict[str, Any]]:
+    """Extrae parámetros en orden; Java no admite valores por defecto.
+
+    Conserva tipos escritos, genéricos, arrays y varargs sin resolver imports.
+    """
+    parametros = []
+    for parametro in nodo.child_by_field_name("parameters").named_children:
+        if parametro.type not in {"formal_parameter", "spread_parameter"}:
+            continue
+        nombre = parametro.child_by_field_name("name")
+        tipo = parametro.child_by_field_name("type")
+        if parametro.type == "spread_parameter":
+            declarador = next(
+                h for h in parametro.named_children if h.type == "variable_declarator"
+            )
+            nombre = declarador.child_by_field_name("name")
+            tipo = next(
+                h
+                for h in parametro.named_children
+                if h.type not in {"modifiers", "variable_declarator"}
+            )
+        texto_tipo = _texto(tipo)
+        dimensiones = parametro.child_by_field_name("dimensions")
+        if dimensiones is not None:
+            texto_tipo += _texto(dimensiones)
+        if parametro.type == "spread_parameter":
+            texto_tipo += "..."
+        parametros.append(
+            {"nombre": _texto(nombre), "tipo": texto_tipo, "por_defecto": None}
+        )
+    return parametros
+
+
+_PRIMITIVOS_JAVA = {
+    "boolean",
+    "byte",
+    "char",
+    "short",
+    "int",
+    "long",
+    "float",
+    "double",
+    "void",
+    "Boolean",
+    "Byte",
+    "Character",
+    "Short",
+    "Integer",
+    "Long",
+    "Float",
+    "Double",
+    "String",
+    "Object",
+}
+
+
+def _es_tipo_primitivo(tipo: str) -> bool:
+    """Indica si un tipo Java es primitivo o de la biblioteca estándar."""
+    tipo = tipo.strip().replace("[]", "").strip()
+    if not tipo:
+        return True
+    # genéricos: List<Foo> -> Foo
+    if "<" in tipo:
+        tipo = tipo.split("<", 1)[0].strip()
+    return tipo in _PRIMITIVOS_JAVA
+
+
+def _tiene_dependencias_inyectadas(constructores: list[dict[str, Any]]) -> bool:
+    """Una clase tiene dependencias inyectadas si algún constructor recibe
+    un parámetro cuyo tipo no es primitivo/estándar (J1)."""
+    for c in constructores:
+        for p in c.get("parametros", []):
+            if not _es_tipo_primitivo(p.get("tipo", "")):
+                return True
+    return False
+
+
+def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Extrae clases y métodos públicos, sin entrar en cuerpos de métodos.
+
+    Los constructores se describen dentro de su clase, sin ser objetivos.
+    Rechaza nombres de métodos duplicados por sobrecarga para evitar objetivos
+    ambiguos en el contrato Clase.metodo.
+    """
+    clases: list[dict[str, Any]] = []
+    funciones: list[dict[str, Any]] = []
+    nombres: set[str] = set()
+
+    def visitar(contenedor: Node, prefijo: str = "") -> None:
+        for nodo in contenedor.named_children:
+            if nodo.type not in {
+                "class_declaration",
+                "interface_declaration",
+                "enum_declaration",
+                "record_declaration",
+            }:
+                continue
+            nombre = prefijo + (_texto(nodo.child_by_field_name("name")) or "")
+            constructores = _constructores(nodo, nombre)
+            clases.append(
+                {
+                    "nombre": nombre,
+                    "tipo": nodo.type,
+                    "linea": nodo.start_point.row + 1,
+                    "docstring": _javadoc(nodo),
+                    "javadoc": desglosar_javadoc(_javadoc(nodo)),
+                    "constructores": constructores,
+                }
+            )
+            inyectadas = _tiene_dependencias_inyectadas(constructores)
+            cuerpo = nodo.child_by_field_name("body")
+            if cuerpo is None:
+                continue
+            visitar(cuerpo, nombre + ".")
+            for metodo in cuerpo.named_children:
+                if metodo.type != "method_declaration":
+                    continue
+                modificadores = next(
+                    (h for h in metodo.named_children if h.type == "modifiers"), None
+                )
+                tokens = (
+                    {h.type for h in modificadores.children}
+                    if modificadores is not None
+                    else set()
+                )
+                publico = "public" in tokens or (
+                    nodo.type == "interface_declaration" and "private" not in tokens
+                )
+                if not publico:
+                    continue
+                objetivo = nombre + "." + _texto(metodo.child_by_field_name("name"))
+                if objetivo in nombres:
+                    raise ValueError(
+                        f"Sobrecarga no admitida en el prototipo: {objetivo}"
+                    )
+                nombres.add(objetivo)
+                parametros = _parametros(metodo)
+                retorno = _texto(metodo.child_by_field_name("type"))
+                cuerpo_metodo = metodo.child_by_field_name("body")
+                fin_firma = (
+                    cuerpo_metodo.start_byte
+                    if cuerpo_metodo is not None
+                    else metodo.end_byte
+                )
+                firma = (
+                    metodo.text[: fin_firma - metodo.start_byte]
+                    .decode("utf-8")
+                    .strip()
+                    .rstrip(";")
+                )
+                ramas = contar_decisiones(metodo)
+                funciones.append(
+                    {
+                        "nombre": objetivo,
+                        "clase": nombre,
+                        "linea": metodo.start_point.row + 1,
+                        "firma": firma,
+                        "parametros": parametros,
+                        "retorno": retorno,
+                        "docstring": _javadoc(metodo),
+                        "javadoc": desglosar_javadoc(_javadoc(metodo)),
+                        "ramas": ramas,
+                        "critical": ramas > 0,
+                        "es_static": "static" in tokens,
+                        "tipada": retorno is not None
+                        and all(p["tipo"] for p in parametros),
+                        "es_async": False,
+                        "dependencias_inyectadas": inyectadas,
+                    }
+                )
+
+    visitar(raiz)
+    return clases, funciones
+
+
+def _constructores(clase: Node, nombre: str) -> list[dict[str, Any]]:
+    """Describe constructores explícitos de la clase, con visibilidad y Javadoc.
+
+    No inventa el constructor implícito ni convierte constructores privados en
+    objetivos. Los constructores sobrecargados se distinguen por su firma.
+    """
+    cuerpo = clase.child_by_field_name("body")
+    if cuerpo is None:
+        return []
+    constructores = []
+    for nodo in cuerpo.named_children:
+        if nodo.type not in {
+            "constructor_declaration",
+            "compact_constructor_declaration",
+        }:
+            continue
+        bloque = nodo.child_by_field_name("body")
+        modificadores = next(
+            (h for h in nodo.named_children if h.type == "modifiers"), None
+        )
+        tokens = (
+            {h.type for h in modificadores.children}
+            if modificadores is not None
+            else set()
+        )
+        visibilidad = next(
+            (v for v in ("public", "protected", "private") if v in tokens), "package"
+        )
+        parametros = nodo if nodo.type == "constructor_declaration" else clase
+        fin = bloque.start_byte if bloque is not None else nodo.end_byte
+        constructores.append(
+            {
+                "nombre": nombre,
+                "linea": nodo.start_point.row + 1,
+                "firma": nodo.text[: fin - nodo.start_byte].decode("utf-8").strip(),
+                "parametros": _parametros(parametros),
+                "visibilidad": visibilidad,
+                "docstring": _javadoc(nodo),
+                "javadoc": desglosar_javadoc(_javadoc(nodo)),
+                "ramas": contar_decisiones(nodo),
+            }
+        )
+    return constructores
+
+
+class JavaAdapter(AdaptadorEnDesarrollo):
+    """Análisis, generación y ejecución de unitarias Java y endpoints Spring MVC."""
+
+    lenguaje = "java"
+    completo = True
+    extensiones = (".java",)
+    marcadores = ("pom.xml", "build.gradle", "build.gradle.kts")
+    frameworks_pruebas = ("junit5",)
+    frameworks_app = ("spring",)
+    # JUnit 5 (#184), Spring MVC con MockMvc (#183) y mutación con PIT (#180).
+    tipos_prueba = ("funcion", "endpoint", "mutacion")
+    huellas_disponibles = True
+    motor_mutacion = "PIT"
+
+    def huellas_de_archivo(self, fuente: str, relativa: str) -> dict[str, str] | None:
+        """Devuelve SHA-256 por método público, sin ejecutar Java (#180).
+
+        La huella incluye nombre, ruta y fuente completa: cambios de campos,
+        imports o métodos auxiliares también invalidan la caché para evitar
+        reutilizar un score con un contexto distinto. Es conservadora: incluso
+        un comentario puede forzar otra ejecución. Sintaxis inválida o nombres
+        ambiguos devuelven None; nunca se reutiliza un resultado por conjetura.
+        """
+        arbol = obtener_parser("java").parse(fuente.encode("utf-8"))
+        if arbol.root_node.has_error:
+            return None
+        try:
+            _, funciones = _declaraciones(arbol.root_node)
+        except ValueError:
+            return None
+        huellas = {
+            f["nombre"]: calcular_huella(
+                "java-pit-v1\n" + relativa + "\n" + f["nombre"] + "\n" + fuente
+            )
+            for f in funciones
+        }
+        huellas.update(
+            {
+                e["objetivo"]: calcular_huella(
+                    "java-spring-v1\n" + relativa + "\n" + e["objetivo"] + "\n" + fuente
+                )
+                for e in extraer_endpoints(arbol.root_node, funciones)
+            }
+        )
+        return huellas
+
+    def funciones_de_modulo(self, raiz: Path, modulo: str) -> list[dict[str, Any]]:
+        """Devuelve métodos públicos y líneas para la mutación/regresión común.
+
+        Lee solo una fuente dentro de la raíz; un archivo ilegible, un enlace,
+        una ruta externa o una declaración ambigua produce una lista vacía.
+        """
+        archivo = raiz / modulo
+        if archivo.is_symlink() or not archivo.resolve().is_relative_to(raiz.resolve()):
+            return []
+        try:
+            fuente = archivo.read_text(encoding="utf-8-sig")
+            arbol = obtener_parser("java").parse(fuente.encode("utf-8"))
+            if arbol.root_node.has_error:
+                return []
+            _, funciones = _declaraciones(arbol.root_node)
+        except (OSError, UnicodeError, ValueError):
+            return []
+        return [{"nombre": f["nombre"], "linea": f["linea"]} for f in funciones]
+
+    def comando_mutacion(self, modulo: str, funciones: list[str]) -> ComandoSandbox:
+        """Devuelve el comando PIT offline acotado a métodos críticos aprobados.
+
+        Solo construye argumentos; no ejecuta Java. Requiere la preparación del
+        POM temporal en la copia del sandbox. Lanza ValueError si la selección
+        está vacía o no corresponde a una clase de una ruta Java estándar.
+        """
+        from qagent.sandbox.pit_comando import comando_pit
+
+        return comando_pit(modulo, funciones)
+
+    def ejecutar_mutacion(self, *args: Any, **opciones: Any) -> ResultadoMutacion:
+        """Ejecuta PIT en Docker sobre la copia y devuelve ResultadoMutacion (#180).
+
+        Usa las pruebas críticas aprobadas y los límites Java del orquestador.
+        Las configuraciones propias se conservan y los fallos quedan sin score.
+        """
+        from qagent.sandbox.pit_ejecucion import ejecutar_pit
+
+        return ejecutar_pit(*args, **opciones)
+
+    def comando_pruebas(self, modulo: str, framework: str | None = None) -> list[str]:
+        """Etapas Maven/JUnit 5/JaCoCo offline, tras preparar la copia (#182)."""
+        from qagent.lenguajes.java_ejecucion import comando_java
+
+        self.elegir_framework(framework)
+        return comando_java(modulo)
+
+    def preparador_sandbox(self) -> Callable[[Path, Path], None]:
+        """Prepara el POM y la prueba Java únicamente en la copia temporal (#182)."""
+        from qagent.lenguajes.java_ejecucion import preparar_java
+
+        return preparar_java
+
+    def lector_informe_sandbox(self) -> Callable[[Path], str | None]:
+        """Recoge las suites Surefire de esta ejecución antes de limpiar /out (#182)."""
+        from qagent.lenguajes.java_ejecucion import recoger_junit
+
+        return recoger_junit
+
+    def prompt_generator(
+        self,
+        contrato: dict[str, Any],
+        intento: int,
+        feedback: str | None,
+        ruta_proyecto: Path | None,
+    ) -> str:
+        """Prompt JUnit 5 desde contrato y contexto estático, sin ejecutar Java (#184)."""
+        from qagent.lenguajes.java_generacion import prompt_java
+
+        return prompt_java(contrato, intento, feedback, ruta_proyecto)
+
+    def archivo_de_prueba(self, objetivo: str, *, paquete: str = "") -> str:
+        """Ruta src/test/java/paquete/ClaseTest.java; el paquete es explícito (#184)."""
+        from qagent.lenguajes.java_generacion import archivo_java
+
+        return archivo_java(objetivo, paquete)
+
+    def archivo_para_contrato(
+        self, contrato: dict[str, Any], ruta_proyecto: Path | None
+    ) -> str:
+        """Obtiene el paquete de la fuente real, sin suponer que coincide con su ruta."""
+        from qagent.lenguajes.java_generacion import contexto_java
+
+        return contexto_java(contrato, ruta_proyecto)["archivo"]
+
+    def comparar_aserciones(
+        self, original: str, reparado: str
+    ) -> ComparacionAserciones:
+        """Detecta cambios de aserciones por AST antes de ejecutar un intento (#184)."""
+        from qagent.lenguajes.java_laundering import comparar_java
+        from qagent.lenguajes.java_spring_generacion import (
+            comparar_spring,
+            es_prueba_spring,
+        )
+
+        if es_prueba_spring(original) or es_prueba_spring(reparado):
+            return comparar_spring(original, reparado)
+        return comparar_java(original, reparado)
+
+    def validar_oraculo(
+        self, contrato: dict[str, Any], codigo: str, ruta_proyecto: Path
+    ) -> str | None:
+        """Contrasta casos, paquete y mocks con el contrato y contexto real de la fuente."""
+        from qagent.lenguajes.java_generacion import contexto_java
+        from qagent.lenguajes.java_oraculo import validar_java
+
+        try:
+            contexto = contexto_java(contrato, ruta_proyecto)
+        except (OSError, UnicodeError, ValueError) as error:
+            return "Oráculo inválido: no se pudo verificar el contexto Java: " + str(
+                error
+            )
+        if contrato.get("tipo") == "endpoint":
+            from qagent.lenguajes.java_spring_generacion import validar_spring
+
+            return validar_spring(contrato, codigo, contexto)
+        return validar_java(contrato, codigo, contexto)
+
+    def reglas_planificacion(self) -> ReglasPlanificacion:
+        """Reglas Java/JUnit 5 para los prompts y filtros del Planner compartido (#181)."""
+        from qagent.lenguajes.java_planificacion import REGLAS_PLANIFICACION_JAVA
+
+        return REGLAS_PLANIFICACION_JAVA
+
+    def reglas_revision(self) -> ReglasRevision:
+        """Reglas de generación, oráculo y ejecución Java integradas (#184, #182)."""
+        from qagent.lenguajes.java_revision import ReglasRevisionJava
+
+        return ReglasRevisionJava()
+
+    def clasificar_ejecucion(self, resultado: ResultadoSandbox) -> Clasificacion | None:
+        """Clasifica etapas Maven y JUnit antes de emitir un veredicto."""
+        from qagent.lenguajes.java_revision import clasificar_java
+
+        return clasificar_java(resultado)
+
+    def cobertura_de_objetivo(
+        self, cobertura: dict[str, Any] | None, modulo: str, objetivo: str
+    ) -> dict[str, float | None] | None:
+        """Devuelve líneas y ramas exactas del método JaCoCo seleccionado."""
+        from qagent.lenguajes.java_cobertura import cobertura_de_metodo
+
+        return cobertura_de_metodo(cobertura, modulo, objetivo)
+
+    def objetivos(self, estructura: Estructura) -> list[dict[str, Any]]:
+        """Lista métodos públicos del análisis y su criticidad por decisiones.
+
+        Conserva las claves modulo, tipo y objetivo de la interfaz común y añade
+        critical. Un constructor se registra como información de su clase.
+        """
+        encontrados = [
+            {
+                "modulo": m["ruta"],
+                "tipo": "funcion",
+                "objetivo": f["nombre"],
+                "critical": f["ramas"] > 0,
+            }
+            for m in estructura.get("modulos", [])
+            for f in m.get("funciones", [])
+            if not f.get("dependencias_inyectadas", False)
+        ]
+        encontrados.extend(
+            {
+                "modulo": m["ruta"],
+                "tipo": "endpoint",
+                "objetivo": e["objetivo"],
+                "critical": e["critical"],
+            }
+            for m in estructura.get("modulos", [])
+            for e in m.get("endpoints", [])
+        )
+        return encontrados
+
+    def motivo_endpoint_no_planificable(self, endpoint: dict[str, Any]) -> str | None:
+        """Omite endpoints Spring sin estado o validación declarativa verificable."""
+        from qagent.lenguajes.java_spring_planificacion import motivo_no_planificable
+
+        return motivo_no_planificable(endpoint)
+
+    def aplicacion_de_endpoint(self, endpoint: dict[str, Any], principal: str) -> str:
+        """Selecciona la clase concreta incluso con varios controladores en un archivo."""
+        return endpoint["clase"]
+
+    def motivo_no_ejecutable(self, raiz: str | os.PathLike[str]) -> str | None:
+        """Avisa de POM heredado, multimódulo, Gradle o Lombok antiguo (J3/J4)."""
+        from qagent.lenguajes.java_ejecucion import motivo_proyecto_no_ejecutable
+
+        return motivo_proyecto_no_ejecutable(Path(raiz))
+
+    def entorno_sandbox(
+        self, raiz: str | os.PathLike[str] | None = None
+    ) -> EntornoSandbox:
+        """Imagen ``qagent-sandbox:java`` (#169) y las carpetas comunes del sandbox."""
+        return EntornoSandbox(
+            imagen=IMAGEN_JAVA,
+            paquetes_base=PAQUETES_JAVA,
+            dir_tests=DIR_TESTS,
+            dir_salida=DIR_SALIDA,
+            informe=ARCHIVO_JUNIT,
+        )
+
+    def traducir_reglas_arquitectura(
+        self, reglas: list[dict[str, Any]], raiz: Path
+    ) -> list[PlanArquitectura]:
+        """Traduce reglas comunes a un verificador ArchUnit aislado."""
+        from qagent.arquitectura.traduccion import traducir_java
+
+        return traducir_java(reglas, raiz)
+
+    def interpretar_resultados(self, informe: str) -> dict[str, Any]:
+        """Convierte el contenido XML de Surefire/JUnit en resultados comunes.
+
+        Devuelve total, pasaron, fallaron, errores, omitidos, duracion_s, inicio
+        y casos. Reutiliza el lector de EN-17 y sus límites de tamaño y entidades.
+        Acepta una testsuite o testsuites con suites planas, como escribe Surefire.
+        Conserva mensajes y marcos Java y extrae esperado/obtenido explícitos de
+        los diagnósticos JUnit para mostrarlos, sin usarlos como oráculo. No
+        convierte fallos en éxitos. La duración es de suites, no del proceso Maven.
+
+        Args:
+            informe: contenido del XML, no la ruta del archivo.
+
+        Raises:
+            JUnitInvalido: si el XML es inseguro, inválido o tiene otra estructura.
+        """
+        return interpretar_junit_java(informe)
+
+    def leer_cobertura(
+        self, dir_salida: str | os.PathLike[str]
+    ) -> dict[str, Any] | None:
+        """Convierte jacoco.xml de /out a files/totals y contadores por método (#182).
+
+        None si el informe falta, es inválido o no ofrece líneas de fuente. El
+        lector no ejecuta Java ni resuelve la DTD externa del informe.
+        """
+        return leer_jacoco(dir_salida)
+
+    def validar_sintaxis(self, codigo: str) -> list[str]:
+        """Devuelve diagnósticos de tree-sitter, o una lista vacía si es válido.
+
+        No comprueba tipos ni reemplaza la compilación con javac.
+        """
+        raiz = obtener_parser("java").parse(codigo.encode("utf-8")).root_node
+        return extraer_errores_sintaxis(raiz) if raiz.has_error else []
+
+    def archivos_fuente(self, raiz: str | os.PathLike[str]) -> list[str]:
+        """Fuentes Java sin pruebas, carpetas generadas ni enlaces simbólicos."""
+        carpeta = Path(raiz)
+        return [
+            relativa
+            for relativa in listar_archivos(carpeta)
+            if self.es_fuente(relativa)
+            and "test" not in Path(relativa).parts
+            and not (carpeta / relativa).is_symlink()
+            and not any(
+                p.is_symlink()
+                for p in (carpeta / relativa).parents
+                if p != carpeta.parent
+            )
+        ]
+
+    def analizar(self, raiz: str | os.PathLike[str]) -> Estructura:
+        """Lee fuentes Java y devuelve lenguaje, módulos, errores y resumen.
+
+        Cada módulo conserva ruta POSIX, huella SHA-256, clases, funciones y
+        endpoints Spring declarados. llama_a usa referencias ruta.java::Clase.metodo a
+        destinos del proyecto resueltos sin inferencia de tipos. docstring
+        contiene Javadoc literal o None. Los archivos
+        inválidos se reportan en errores y no detienen el análisis de los demás.
+
+        Raises:
+            NotADirectoryError: si raiz no es una carpeta existente.
+        """
+        carpeta = Path(raiz)
+        modulos = []
+        errores = []
+        parser = obtener_parser("java")
+        arboles: dict[str, Node] = {}
+        for relativa in self.archivos_fuente(carpeta):
+            archivo = carpeta / relativa
+            try:
+                fuente = archivo.read_text(encoding="utf-8-sig")
+                arbol = parser.parse(fuente.encode("utf-8"))
+                if arbol.root_node.has_error:
+                    raise ValueError(
+                        "; ".join(extraer_errores_sintaxis(arbol.root_node))
+                    )
+                clases, funciones = _declaraciones(arbol.root_node)
+            except (OSError, UnicodeError, ValueError, RecursionError) as error:
+                errores.append(
+                    {
+                        "ruta": relativa,
+                        "tipo": type(error).__name__,
+                        "linea": None,
+                        "mensaje": str(error),
+                    }
+                )
+                continue
+            modulos.append(
+                {
+                    "ruta": relativa,
+                    "huella": calcular_huella(fuente),
+                    "clases": clases,
+                    "funciones": funciones,
+                    "endpoints": extraer_endpoints(arbol.root_node, funciones),
+                    "metodos_con_dependencias_inyectadas": [
+                        f["nombre"]
+                        for f in funciones
+                        if f.get("dependencias_inyectadas")
+                    ],
+                }
+            )
+            arboles[relativa] = arbol.root_node
+        agregar_llamadas(modulos, arboles)
+        for modulo in modulos:
+            manejadores = {e["manejador"] for e in modulo["endpoints"]}
+            por_nombre = {f["nombre"]: f for f in modulo["funciones"]}
+            for endpoint in modulo["endpoints"]:
+                endpoint["llama_a"] = por_nombre[endpoint["manejador"]].get(
+                    "llama_a", []
+                )
+            # Un controlador se ofrece como endpoint, no como invocación directa
+            # que eluda el binding, las validaciones y el contexto MVC.
+            modulo["funciones"] = [
+                f for f in modulo["funciones"] if f["nombre"] not in manejadores
+            ]
+        funciones = [f for m in modulos for f in m["funciones"]]
+        return {
+            "lenguaje": self.lenguaje,
+            "modulos": modulos,
+            "errores": errores,
+            "resumen": {
+                "total_modulos": len(modulos),
+                "total_clases": sum(len(m["clases"]) for m in modulos),
+                "total_funciones_publicas": len(funciones),
+                "total_endpoints": sum(len(m["endpoints"]) for m in modulos),
+                "total_errores": len(errores),
+                "total_metodos_con_dependencias_inyectadas": sum(
+                    len(m.get("metodos_con_dependencias_inyectadas", []))
+                    for m in modulos
+                ),
+            },
+        }

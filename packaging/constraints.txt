@@ -1,0 +1,15 @@
+# Versiones fijadas de las herramientas que construyen QAgent (B8).
+#
+# Sin este archivo, `pip install` toma la última versión de PyInstaller, build o
+# twine y el ejecutable de Windows o el paquete de PyPI pueden dejar de construirse
+# sin que nadie toque el código. Las versiones se actualizan a mano (probando el
+# empaquetado) o con Dependabot.
+#
+# Uso:
+#   pip install -c packaging/constraints.txt -e ".[dev,empaquetar]"
+#   pip install -c packaging/constraints.txt build twine
+build==1.6.1
+pyinstaller==6.22.3
+setuptools==84.2.1
+twine==7.0.0
+wheel==0.48.0

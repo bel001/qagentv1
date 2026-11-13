@@ -1,0 +1,80 @@
+/* config-pruebas.css — pantalla «Preparar»: qué hacer, tipos de prueba, críticas y comprobaciones previas.
+   Usa solo los tokens del sistema (css/tokens.css, sección 1). La barra, la cabecera, las tarjetas, los
+   avisos y los chips se comparten con Inicio (inicio.css); la casilla .exp-caja, con Explorar. */
+#s-tests{font-family:var(--fuente-ui);font-size:var(--texto-cuerpo);line-height:var(--interlineado);color:var(--texto);background:var(--fondo)}
+#s-tests .page.prep{width:100%;max-width:var(--contenido-max);margin:0 auto;padding:var(--esp-6);gap:var(--esp-5)}
+
+.prep-rejilla{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,340px);gap:var(--esp-5);align-items:start}
+.prep-estado{align-items:flex-start}
+.prep-fila{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--esp-5);align-items:start}
+/* issue 246: pestañas por tipo de caja; si una tarjeta de la fila se oculta, la otra ocupa todo el ancho */
+.prep-fila:has(> .hide){grid-template-columns:minmax(0,1fr)}
+.prep-cajas-barra{display:flex;flex-wrap:wrap;align-items:center;gap:var(--esp-3) var(--esp-4)}
+.prep-cajas-barra .np-meta{margin:0;flex:1 1 260px}
+.prep-cajas-barra .obj-switch{max-width:100%;overflow-x:auto}
+.prep-desc{display:block;color:var(--texto-2);font-size:var(--texto-meta);font-weight:var(--peso-normal);margin-top:2px}
+
+/* ¿Qué quieres hacer?: cuatro opciones tipo radio, la elegida resaltada */
+.prep-modo-tarjeta{gap:var(--esp-4)}
+.prep-modos{display:flex;flex-direction:column;gap:var(--esp-3);width:100%}
+.prep-modo-grupo{display:flex;flex-direction:column;gap:var(--esp-3)}
+.prep-modo{display:flex;align-items:flex-start;gap:var(--esp-3);width:100%;padding:var(--esp-4);border:var(--borde-ancho) solid var(--borde);border-radius:var(--radio-control);background:var(--hundido);color:var(--texto);font:inherit;text-align:left;cursor:pointer}
+.prep-modo b{font-weight:var(--peso-medio)}
+.prep-modo:hover{border-color:var(--borde-fuerte)}
+.prep-modo.on{border-color:var(--accion-borde);background:var(--accion-suave)}
+.prep-modo:disabled{opacity:.5;cursor:not-allowed}
+.prep-modo:focus-visible{outline:2px solid var(--foco-anillo);outline-offset:2px}
+.prep-radio{flex-shrink:0;display:grid;place-items:center;width:16px;height:16px;margin-top:3px;border:1.5px solid var(--texto-3);border-radius:50%}
+.prep-modo.on .prep-radio{border-color:var(--enlace)}
+.prep-modo.on .prep-radio::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--enlace)}
+.prep-reg-deep{display:flex;align-items:flex-start;gap:var(--esp-3);margin:0 var(--esp-4) var(--esp-2);padding:var(--esp-3) var(--esp-4);border-left:var(--borde-ancho) solid var(--accion-borde);cursor:pointer}
+.prep-reg-deep .exp-caja{margin-top:3px}
+.prep-reg-deep b{font-weight:var(--peso-medio)}
+.prep-reg-deep.dis{opacity:.55;cursor:not-allowed}
+
+/* Tipos de prueba y funciones críticas: filas con la casilla de la demo */
+.prep-lista{display:flex;flex-direction:column;gap:var(--esp-3);width:100%}
+.prep-casilla{display:flex;align-items:flex-start;gap:var(--esp-3);cursor:pointer}
+.prep-casilla .exp-caja{margin-top:3px}
+.prep-casilla b{font-weight:var(--peso-normal)}
+.prep-casilla.dis{opacity:.5;cursor:not-allowed}
+.prep-enlace{align-self:flex-start;padding:0;font-size:var(--texto-meta)}
+/* issue 133: lo que no aplica a la revisión rápida (Humo) se ve atenuado, con su explicación */
+.prep-no-aplica{opacity:.6}
+
+/* Comprobaciones previas */
+.prep-checks{list-style:none;display:flex;flex-direction:column;gap:var(--esp-4);width:100%}
+.prep-checks li{display:flex;gap:var(--esp-3);align-items:flex-start}
+.prep-checks b{display:block;font-weight:var(--peso-medio)}
+.prep-checks .prep-enlace{margin-top:var(--esp-2)}
+.prep-check-ico{display:grid;place-items:center;flex-shrink:0;margin-top:2px}
+.prep-check-exito .prep-check-ico{color:var(--exito-t)}
+.prep-check-aviso .prep-check-ico{color:var(--aviso-t)}
+.prep-check-bug .prep-check-ico{color:var(--bug-t)}
+.prep-check-progreso .prep-check-ico{color:var(--progreso-t)}
+
+/* Límites de la corrida */
+.prep-limites{display:flex;flex-direction:column;gap:var(--esp-2);color:var(--texto-2)}
+.prep-limites b{color:var(--texto);font-weight:var(--peso-medio)}
+.prep-arquitectura{gap:var(--esp-3)}
+/* issue 266 (I6): opciones avanzadas plegadas (mismo patrón que «Opciones» de Clonar) */
+.prep-avanzado{padding-top:var(--esp-4)}
+.prep-avanzado[open]{gap:var(--esp-4)}
+.prep-avanzado > summary{font-weight:var(--peso-medio)}
+.prep-avanzado > .np-meta{margin:0}
+.prep-arq-campos{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--esp-3)}
+.prep-arq-campo{display:flex;flex-direction:column;gap:var(--esp-2);min-width:0}
+.prep-arq-campo .np-etiqueta{margin-top:0}
+.prep-arq-acciones{display:flex;flex-wrap:wrap;gap:var(--esp-3)}
+.prep-arq-acciones .ini-btn{flex:1}
+.prep-arquitectura .np-aviso{align-items:flex-start}
+
+/* El viewport incluye la barra lateral: apilar antes evita que las acciones E2E
+   queden fuera del área visible en pantallas de 1366/1550 px (issue 186). */
+@media(max-width:1600px){.prep-rejilla{grid-template-columns:minmax(0,1fr)}}
+@media(max-width:760px){
+  .prep-fila{grid-template-columns:minmax(0,1fr)}
+  .prep-arq-campos{grid-template-columns:minmax(0,1fr)}
+  #s-tests .page.prep{padding-left:var(--esp-4);padding-right:var(--esp-4)}
+}
+

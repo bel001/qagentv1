@@ -1,0 +1,140 @@
+# QAgent — configuración del equipo (este archivo se versiona y lo comparte todo el equipo)
+# Las claves NO van aquí: van en .env, que no se sube al repositorio
+# Fuente de modelos y precios: docs/decisiones/ADR-001-modelos.md
+
+[presupuesto]
+tope_por_corrida_usd = 1.00      # banco propio; subir a 7.00 para repositorios externos
+tope_semestre_usd = 25.00
+max_tokens_por_corrida = 200000   # red de seguridad independiente del precio (A1)
+
+[reintentos]
+max_intentos = 3
+
+# Metas de calidad por corrida (ADR-001: Pass Rate 70–80 %, cobertura de líneas ≥ 60 %,
+# iteraciones promedio < 2)
+[umbrales]
+pass_rate_min = 70               # % de pruebas aprobadas
+cobertura_lineas_min = 60        # % de líneas cubiertas
+iteraciones_promedio_max = 2.0   # intentos promedio por prueba
+
+# Mutation testing (EN-09): mutmut solo corre sobre las funciones marcadas para
+# profundizar, nunca sobre el repositorio completo. Si se agota el tiempo, la función
+# queda como «tiempo agotado» sin Mutation Score y la corrida sigue.
+[mutacion]
+tiempo_maximo_por_funcion_s = 120   # segundos por función crítica
+
+# Pruebas de integración interna (#245, ADR-014): una función raíz se prueba junto con las
+# funciones internas que llama. Estos límites acotan la cadena; si hay más, se recorta y el
+# informe lo dice.
+[integracion]
+profundidad_max = 2   # niveles de llamadas internas desde la raíz
+max_funciones = 4      # funciones por cadena, contando la raíz
+
+# Contrato inferido para funciones sin docstring (#275, ADR-016): el Planner infiere los
+# casos leyendo el código y su contexto (nunca ejecutándolo) y los marca como `inferido`.
+# Con `activa = false` esas funciones se omiten como antes.
+[inferencia]
+activa = true
+max_funciones_por_modulo = 20    # funciones sin contrato que se infieren por módulo
+max_caracteres_contexto = 6000   # contexto estático por función (cuerpo, llamadores, tests)
+
+# Límites de cada contenedor del sandbox Docker (EN-03). Si Docker Desktop tiene menos
+# CPU asignados que `cpus`, se usan los que tenga. La memoria es también el tope de swap.
+# Solo los cambia el equipo aquí: ~/.qagent/config.local.toml no puede tocarlos.
+[sandbox]
+cpus = 4
+memoria = "3g"                   # formato Docker: "512m", "2g", "3g"...
+timeout_s = 120                  # segundos por ejecución; el paso del orquestador espera más
+
+# Límites por lenguaje (#169): solo `memoria` y `timeout_s`; lo que falte (y los CPU) se
+# toma de [sandbox], que es también el de Python. Medidos en docs/arquitectura.md (sección 7).
+# Rango soportado por QAgent (ADR-013): 3.10–3.14. Fuera del rango la corrida se detiene.
+versiones_python = ["3.10", "3.11", "3.12", "3.13", "3.14"]
+version_python_por_defecto = "3.11"
+
+[sandbox.javascript]
+memoria = "2g"
+timeout_s = 120
+
+[sandbox.typescript]
+memoria = "2g"
+timeout_s = 120
+
+[sandbox.java]
+memoria = "4g"                   # la JVM (Maven/Gradle + JUnit + JaCoCo) necesita más
+timeout_s = 300                  # arranque de la JVM y compilación antes de las pruebas
+
+# Espacio en disco del sandbox (#267). Docker guarda las imágenes en un disco virtual que en
+# Windows no se achica solo; sin estos límites unas pocas imágenes de dependencias llenan C:.
+# Solo los cambia el equipo aquí: ~/.qagent/config.local.toml no puede tocarlos. Un valor
+# que falte o no sea un número mayor que 0 desactiva ese límite (nunca se borra ni bloquea
+# por un valor ilegible).
+[disco]
+tope_imagenes_derivadas_gb = 10  # suma de las imágenes req-, node-, java- y browser-; al superarla
+                                 # se borran las menos usadas (nunca la base ni la de la corrida en curso)
+cache_antiguedad_dias = 7        # solo en «Liberar espacio» (manual, con confirmación): poda la caché de Docker sin usar en más de esto
+espacio_libre_minimo_gb = 10     # por debajo, no se construye ni se descarga ninguna imagen
+
+# Cada agente usa la URL de chat de su proveedor (src/qagent/llm/fabrica.py).
+# Para otra URL agrega:  endpoint = "https://.../v1/chat/completions"
+# `esfuerzo` se envía como `reasoning_effort`; quítalo si el proveedor no lo acepta.
+[agentes.planner]
+
+proveedor = "xiaomi"
+modelo = "mimo-v2.6-pro"
+precio_entrada_usd_m = 0.435
+precio_salida_usd_m = 0.87
+precio_cache_lectura_usd_m = 0.0036
+
+# proveedor = "anthropic"
+# modelo = "claude-opus-5-5"
+# esfuerzo = "max"
+# precio_entrada_usd_m = 4.00
+# precio_salida_usd_m = 20.00
+# precio_cache_lectura_usd_m = 0.20
+
+[agentes.generator]
+proveedor = "xiaomi"
+modelo = "mimo-v2.6-pro"
+precio_entrada_usd_m = 0.435
+precio_salida_usd_m = 0.87
+precio_cache_lectura_usd_m = 0.0036
+
+[agentes.reviewer]
+proveedor = "openai"
+modelo = "gpt-6-luna"            # ID confirmado en developers.openai.com/api/docs/models
+esfuerzo = "max"
+precio_entrada_usd_m = 0.10
+precio_salida_usd_m = 0.50
+precio_cache_lectura_usd_m = 0.01
+# Si la entrada supera 272K tokens, toda la petición cuesta 0.20 / 0.75
+
+# Agente Explicador (HU-32, ADR-008): después del veredicto explica en palabras simples
+# por qué no pasó cada función. Es obligatorio como los demás agentes (EP-10 #172): se
+# configura en Configuración → «Agregar API» (clave: OPENAI_API_KEY_EXPLICADOR en .env).
+# Con modo = "ia" (#166) un LLM redacta cada explicación leyendo todos los intentos; si
+# falla, tarda más de tiempo_maximo_s o se agota el presupuesto, se usa la plantilla sin
+# IA (0 tokens).
+[agentes.explicador]
+activo = true
+modo = "ia"
+proveedor = "openai"
+modelo = "gpt-6-luna"
+precio_entrada_usd_m = 0.10
+precio_salida_usd_m = 0.50
+tiempo_maximo_s = 60             # segundos por explicación; al vencer, plantilla
+
+# Agente Recomendador (EP-15, ADR-011): en Vista previa sugiere qué tipos de prueba hacer.
+# Con modo = "reglas" usa reglas sin IA (0 tokens) y es el valor predeterminado. Con
+# modo = "ia" (#200) un LLM ordena y explica esos mismos tipos, nunca agrega otros, y las
+# reglas quedan de respaldo. Sigue apagado hasta medir utilidad, costo y latencia (#201).
+# Para probarlo, copia la sección a config.local.toml con modo = "ia" y descomenta
+# proveedor, modelo y precios (clave: OPENAI_API_KEY_RECOMENDADOR u OPENAI_API_KEY en
+# .env). Sin clave, con error o pasado el tiempo máximo se usan las reglas.
+[agentes.recomendador]
+modo = "reglas"
+# proveedor = "openai"
+# modelo = "gpt-6-luna"
+# precio_entrada_usd_m = 0.10
+# precio_salida_usd_m = 0.50
+# tiempo_maximo_s = 30           # segundos por recomendación; al vencer, reglas

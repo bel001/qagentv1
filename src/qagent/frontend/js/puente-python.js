@@ -1,0 +1,20 @@
+// puente-python.js — recibe los eventos que Python envía a la interfaz (DesktopAPI.emit_event)
+window.onQAgentEvent = function(event) {
+  console.log("[Python Event]", event);
+  if (event.type === 'log') {
+    toast(escHtml(event.data.message));
+  } else if (event.type === 'clonado_avance') {
+    avanceClonado(event.data);
+  } else if (event.type === 'clonado_fin') {
+    finClonado(event.data);
+  } else if (event.type === 'corrida_evento') {
+    monitorEventoReal(event.data);   // una fila del Monitor (monitor.js)
+  } else if (event.type === 'revision_inferidos') {
+    abrirRevisionInferidos(event.data);   // la corrida espera esta revisión (modal-revision-inferidos.js, issue 275)
+  } else if (event.type === 'recomendacion_ia') {
+    recibirRecomendacionIA(event.data);   // la IA respondió después de mostrar la Vista previa (vista-previa.js)
+  } else if (event.type === 'corrida_fin') {
+    monitorFinReal(event.data);      // resumen de la corrida real (monitor.js)
+  }
+};
+

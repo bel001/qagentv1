@@ -1,0 +1,1034 @@
+{
+  "funciones": [
+    {
+      "modulo": "services/pricing.py",
+      "funcion": "calculate_discount",
+      "critical": true,
+      "decision": "accept",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.124,
+      "paso": true,
+      "lineas": 100.0,
+      "ramas": 95.0,
+      "iteraciones": 1,
+      "tokens": [
+        1116,
+        8184,
+        3100
+      ],
+      "mutation_score": 92.0,
+      "contrato": {
+        "funcion": "calculate_discount",
+        "firma": "(cart_total: float, coupon_code: Optional[str] = None, user_tier: str = \"standard\") -> float",
+        "tipos": {
+          "cart_total": "float (>0)",
+          "coupon_code": "str | None",
+          "user_tier": "Literal[\"standard\", \"gold\", \"vip\"]"
+        },
+        "docstring": "Calcula el descuento aplicable considerando cupón estacional y nivel de lealtad.",
+        "comportamiento_esperado": [
+          "Si cart_total < 0 debe lanzar ValueError(\"El total no puede ser negativo\")",
+          "VIP recibe un 15% automático sobre el remanente post-cupón",
+          "Cupón \"SUMMER20\" descuenta 20% flat topeado a $50",
+          "Tope estricto: la deducción acumulada total no puede exceder el 40%"
+        ],
+        "contexto_acotado": [
+          "config.DISCOUNT_LIMIT = 0.40",
+          "services.users.TierManager"
+        ]
+      },
+      "traza": null,
+      "codigo": "import pytest\nfrom services.pricing import calculate_discount\n\ndef test_calculate_discount_normal_vip():\n    total = 100.0\n    res = calculate_discount(total, coupon_code=None, user_tier=\"vip\")\n    assert res == 15.0\n\ndef test_calculate_discount_coupon_cap():\n    total = 500.0\n    res = calculate_discount(total, coupon_code=\"SUMMER20\", user_tier=\"standard\")\n    assert res == 50.0\n\ndef test_calculate_discount_negative_raises():\n    with pytest.raises(ValueError, match=\"El total no puede ser negativo\"):\n        calculate_discount(-10.0)"
+    },
+    {
+      "modulo": "services/inventory.py",
+      "funcion": "reserve_stock_atomic",
+      "critical": true,
+      "decision": "stalled",
+      "motivo_estancado": "error_repetido",
+      "laundering_detectado": true,
+      "duracion_s": 0.24,
+      "paso": false,
+      "lineas": 68.0,
+      "ramas": 55.0,
+      "iteraciones": 3,
+      "tokens": [
+        1962,
+        14388,
+        5450
+      ],
+      "mutation_score": 30.0,
+      "contrato": {
+        "funcion": "reserve_stock_atomic",
+        "firma": "(sku: str, quantity: int, order_id: str, timeout_secs: int = 300) -> bool",
+        "tipos": {
+          "sku": "str",
+          "quantity": "int (>0)",
+          "order_id": "str",
+          "timeout_secs": "int"
+        },
+        "docstring": "Bloquea unidades en Redis mediante un lock distribuido Redlock atómico.",
+        "comportamiento_esperado": [
+          "Si el stock disponible < quantity, debe arrojar InsufficientStockError",
+          "Debe adquirir lock atómico Redlock con TTL especificado",
+          "En caso de timeout o concurrencia, liberar lock parcial y retornar False"
+        ],
+        "contexto_acotado": [
+          "redis.asyncio",
+          "exceptions.InsufficientStockError",
+          "services.distributed_lock"
+        ]
+      },
+      "traza": "Reviewer Security Alert [Iteraciones 2 y 3]:\nSe detectó relajación deliberada de aserciones (\"Assertion Laundering / Assertion Neutralization\").\nDiff detectado en AST del test:\n- Iteración 1: assert lock.is_acquired() is True and inventory.get_locked_state(sku) == \"HELD\"\n+ Iteración 2: assert res is not None  # <-- Generador evadió la aserción estricta del lock\n+ Iteración 3: assert res is not None  # <-- misma relajación (hash del diff repetido)\n\nAcción del Reviewer: Rechazo de la prueba. Se conserva la versión de la Iter 1 como referencia y se marca para revisión humana.",
+      "codigo": "# INTENTOS 2 y 3 - RECHAZADOS POR REVIEWER (ASSERTION LAUNDERING)\nimport pytest\nfrom services.inventory import reserve_stock_atomic\n\ndef test_reserve_stock_insufficient_stock():\n    res = reserve_stock_atomic(\"SKU-998\", quantity=1000, order_id=\"ORD-101\")\n    assert res is not None"
+    },
+    {
+      "modulo": "services/payments.py",
+      "funcion": "validate_credit_card_token",
+      "critical": true,
+      "decision": "stalled",
+      "motivo_estancado": "limite_intentos",
+      "laundering_detectado": false,
+      "duracion_s": 0.51,
+      "paso": false,
+      "lineas": 52.0,
+      "ramas": 40.0,
+      "iteraciones": 3,
+      "tokens": [
+        2484,
+        18216,
+        6900
+      ],
+      "mutation_score": 25.0,
+      "contrato": {
+        "funcion": "validate_credit_card_token",
+        "firma": "(token: str, gateway_id: str) -> GatewayAuthResponse",
+        "tipos": {
+          "token": "str (JWT PCI-DSS format)",
+          "gateway_id": "str"
+        },
+        "docstring": "Verifica la validez y firma criptográfica del token ante la pasarela bancaria.",
+        "comportamiento_esperado": [
+          "Valida regex estricto de token token_pci_\\w{24}",
+          "Lanza InvalidTokenSignature si la clave pública expira o falla mTLS",
+          "Retorna GatewayAuthResponse con status=\"AUTHORIZED\""
+        ],
+        "contexto_acotado": [
+          "security.pci_crypto",
+          "gateways.stripe",
+          "config.MTLS_CERTS"
+        ]
+      },
+      "traza": "SandboxExecutionError [Estancado tras 3/3 intentos]:\nConnectionRefusedError: [Errno 111] Connection refused (127.0.0.1:8443)\nTraceback (most recent call last):\n  File \"tests/test_payments.py\", line 9, in test_validate_token_expired\n    validate_credit_card_token(token, gateway_id=\"stripe_v3\")\n  File \"/app/services/payments.py\", line 45, in validate_credit_card_token\n    sock.connect((\"127.0.0.1\", 8443))\nConnectionRefusedError: [Errno 111] Connection refused\nEstado: la prueba necesita un mock de gateways.stripe; el sandbox no tiene red (aislamiento hermético).",
+      "codigo": "import pytest\nfrom services.payments import validate_credit_card_token\nfrom exceptions import InvalidTokenSignature\n\ndef test_validate_token_expired():\n    token = \"token_pci_expired_0019283921029384\"\n    with pytest.raises(InvalidTokenSignature):\n        validate_credit_card_token(token, gateway_id=\"stripe_v3\")"
+    },
+    {
+      "modulo": "services/discounts.py",
+      "funcion": "compute_loyalty_multiplier",
+      "critical": true,
+      "decision": "accept",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.095,
+      "paso": true,
+      "lineas": 98.0,
+      "ramas": 92.0,
+      "iteraciones": 1,
+      "tokens": [
+        1071,
+        7854,
+        2975
+      ],
+      "mutation_score": 38.0,
+      "contrato": {
+        "funcion": "compute_loyalty_multiplier",
+        "firma": "(orders_count: int, registered_months: int) -> float",
+        "tipos": {
+          "orders_count": "int (>=0)",
+          "registered_months": "int (>=0)"
+        },
+        "docstring": "Calcula el coeficiente multiplicador para puntos de fidelidad según antigüedad y volumen de compras.",
+        "comportamiento_esperado": [
+          "Si registered_months >= 12 y orders_count >= 5 -> multiplicador exacto 1.5x",
+          "Si registered_months >= 6 -> multiplicador exacto 1.2x",
+          "En cualquier otro caso retorna 1.0x baseline invariable"
+        ],
+        "contexto_acotado": [
+          "services.loyalty.Rules"
+        ]
+      },
+      "traza": "Mutation Analysis Warning [Brecha Cobertura vs Mutantes]:\nCobertura de línea: 98% (Alta) | Mutation Score: 38% (3 de 8 mutantes eliminados).\nMutantes sobrevivientes (5), entre ellos:\n  - Mutante #1: services/discounts.py:14 (Reemplazo de '>=' por '>') -> Test NO falló en valor de frontera 12 meses.\n  - Mutante #2: services/discounts.py:18 (Mutación de constante 1.5 a 1.0) -> Sobrevivió por aserción débil (assert res > 1.0 en lugar de assert res == 1.5).\n  - Mutante #3: Negación de branch de antigüedad.\nSe solicita al agente Generator generar pruebas de límite estricto.",
+      "codigo": "import pytest\nfrom services.discounts import compute_loyalty_multiplier\n\ndef test_compute_loyalty_basic():\n    res = compute_loyalty_multiplier(orders_count=6, registered_months=14)\n    assert res > 1.0"
+    },
+    {
+      "modulo": "services/cart.py",
+      "funcion": "apply_bulk_promotion",
+      "critical": true,
+      "decision": "bug_detectado",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.188,
+      "paso": false,
+      "lineas": 94.0,
+      "ramas": 88.0,
+      "iteraciones": 2,
+      "tokens": [
+        1638,
+        12012,
+        4550
+      ],
+      "mutation_score": 40.0,
+      "contrato": {
+        "funcion": "apply_bulk_promotion",
+        "firma": "(items: List[CartItem], category_id: int) -> CartSummary",
+        "tipos": {
+          "items": "List[CartItem]",
+          "category_id": "int"
+        },
+        "docstring": "Aplica 3x2 en items de la misma categoría especificada.",
+        "comportamiento_esperado": [
+          "Agrupa por category_id y descuenta la unidad más barata cada 3 items",
+          "Carritos vacíos devuelven CartSummary con discount=0 y items_count=0",
+          "No altera precios unitarios de productos fuera de la categoría"
+        ],
+        "contexto_acotado": [
+          "models.CartItem",
+          "models.CartSummary"
+        ]
+      },
+      "traza": "Oracle Traceability Check [Iteración 2/3]:\n- Iteración 1: assert summary.total_discount == 20.0   -> FAILED (la función devolvió 10.0)\n+ Iteración 2: assert summary.total_discount == 10.0   -> PASSED\nLiteral 10.0 sin origen en planner_contract.comportamiento_esperado.\nRegla aplicada: el valor esperado solo puede provenir del contrato (firma, tipos, docstring), nunca del resultado de ejecutar el código.\n\nAcción del Reviewer: Rechazo de la prueba y corte del ciclo (reintentar no corrige un defecto del código).\nHallazgo: POSIBLE DEFECTO en services/cart.py::apply_bulk_promotion — la promoción 3x2 solo se aplica al primer grupo.",
+      "codigo": "# INTENTO 2 - RECHAZADO POR REVIEWER (ORÁCULO ALTERADO)\nimport pytest\nfrom services.cart import apply_bulk_promotion\nfrom models import CartItem\n\ndef test_apply_bulk_promotion_six_items():\n    items = [CartItem(id=i, category_id=5, price=10.0) for i in range(6)]\n    summary = apply_bulk_promotion(items, category_id=5)\n    assert summary.total_discount == 10.0"
+    },
+    {
+      "modulo": "services/cart.py",
+      "funcion": "calculate_tax_breakdown",
+      "critical": false,
+      "decision": "accept",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.11,
+      "paso": true,
+      "lineas": 100.0,
+      "ramas": 100.0,
+      "iteraciones": 1,
+      "tokens": [
+        1044,
+        7656,
+        2900
+      ],
+      "mutation_score": null,
+      "contrato": {
+        "funcion": "calculate_tax_breakdown",
+        "firma": "(subtotal: float, state_code: str, is_exempt: bool = False) -> TaxReport",
+        "tipos": {
+          "subtotal": "float",
+          "state_code": "str (2 chars)",
+          "is_exempt": "bool"
+        },
+        "docstring": "Desglosa impuestos estatales y municipales aplicables.",
+        "comportamiento_esperado": [
+          "Si is_exempt=True, total_tax siempre es 0.00",
+          "Valida código de estado ISO-3166-2",
+          "Calcula tasas específicas para NY (8.875%), CA (7.25%), TX (6.25%)"
+        ],
+        "contexto_acotado": [
+          "geo.taxes",
+          "models.TaxReport"
+        ]
+      },
+      "traza": null,
+      "codigo": "import pytest\nfrom services.cart import calculate_tax_breakdown\n\ndef test_tax_exempt_customer():\n    rep = calculate_tax_breakdown(subtotal=150.0, state_code=\"CA\", is_exempt=True)\n    assert rep.total_tax == 0.0\n    assert rep.effective_rate == 0.0\n\ndef test_tax_california_rate():\n    rep = calculate_tax_breakdown(subtotal=100.0, state_code=\"CA\", is_exempt=False)\n    assert rep.total_tax == 7.25"
+    },
+    {
+      "modulo": "services/shipping.py",
+      "funcion": "estimate_delivery_window",
+      "critical": false,
+      "decision": "accept",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.142,
+      "paso": true,
+      "lineas": 96.0,
+      "ramas": 90.0,
+      "iteraciones": 1,
+      "tokens": [
+        1089,
+        7986,
+        3025
+      ],
+      "mutation_score": null,
+      "contrato": {
+        "funcion": "estimate_delivery_window",
+        "firma": "(zip_code: str, warehouse_id: str, express: bool = False) -> DeliveryWindow",
+        "tipos": {
+          "zip_code": "str",
+          "warehouse_id": "str",
+          "express": "bool"
+        },
+        "docstring": "Calcula rango estimado de entrega en días hábiles.",
+        "comportamiento_esperado": [
+          "Excluye fines de semana y feriados en el cálculo",
+          "Modo express garantiza entrega en 24-48 horas dentro del radio",
+          "Lanza UnsupportedZoneError para códigos postales fuera de cobertura"
+        ],
+        "contexto_acotado": [
+          "logistics.carriers",
+          "models.DeliveryWindow"
+        ]
+      },
+      "traza": null,
+      "codigo": "import pytest\nfrom services.shipping import estimate_delivery_window\n\ndef test_estimate_delivery_express():\n    win = estimate_delivery_window(\"90210\", warehouse_id=\"WH-LA-01\", express=True)\n    assert win.max_days <= 2\n    assert win.is_guaranteed is True"
+    },
+    {
+      "modulo": "services/payments.py",
+      "funcion": "refund_charge_idempotent",
+      "critical": true,
+      "decision": "accept",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.29,
+      "paso": true,
+      "lineas": 100.0,
+      "ramas": 94.0,
+      "iteraciones": 2,
+      "tokens": [
+        1467,
+        10758,
+        4075
+      ],
+      "mutation_score": 95.0,
+      "contrato": {
+        "funcion": "refund_charge_idempotent",
+        "firma": "(payment_id: str, amount_cents: int, idempotency_key: str) -> RefundResult",
+        "tipos": {
+          "payment_id": "str",
+          "amount_cents": "int (>0)",
+          "idempotency_key": "str"
+        },
+        "docstring": "Reembolsa saldo con salvaguarda de idempotencia contra cobros dobles.",
+        "comportamiento_esperado": [
+          "Rechaza montos <= 0 con InvalidAmountException",
+          "Si la clave de idempotencia ya fue procesada, retorna el resultado previo sin re-llamar al procesador",
+          "Actualiza el ledger contable atómicamente"
+        ],
+        "contexto_acotado": [
+          "ledger.accounting",
+          "gateways.stripe"
+        ]
+      },
+      "traza": null,
+      "codigo": "import pytest\nfrom services.payments import refund_charge_idempotent\n\ndef test_refund_duplicate_idempotency_key_does_not_double_charge():\n    key = \"idem_key_unique_8823\"\n    r1 = refund_charge_idempotent(\"pay_123\", 4500, idempotency_key=key)\n    r2 = refund_charge_idempotent(\"pay_123\", 4500, idempotency_key=key)\n    assert r1.refund_id == r2.refund_id\n    assert r2.was_cached is True"
+    },
+    {
+      "modulo": "services/inventory.py",
+      "funcion": "check_low_stock_alerts",
+      "critical": false,
+      "decision": "accept",
+      "motivo_estancado": null,
+      "laundering_detectado": false,
+      "duracion_s": 0.135,
+      "paso": true,
+      "lineas": 92.0,
+      "ramas": 85.0,
+      "iteraciones": 1,
+      "tokens": [
+        954,
+        6996,
+        2650
+      ],
+      "mutation_score": null,
+      "contrato": {
+        "funcion": "check_low_stock_alerts",
+        "firma": "(threshold_ratio: float = 0.15) -> List[StockAlert]",
+        "tipos": {
+          "threshold_ratio": "float (0.01 .. 0.50)"
+        },
+        "docstring": "Escanea el catálogo de existencias y despacha notificaciones para reposición.",
+        "comportamiento_esperado": [
+          "Filtra productos donde current_stock / safety_stock <= threshold_ratio",
+          "Ignora productos marcados como descontinuados"
+        ],
+        "contexto_acotado": [
+          "models.StockAlert",
+          "services.notifications"
+        ]
+      },
+      "traza": null,
+      "codigo": "import pytest\nfrom services.inventory import check_low_stock_alerts\n\ndef test_check_low_stock_filters_discontinued():\n    alerts = check_low_stock_alerts(threshold_ratio=0.20)\n    for alert in alerts:\n        assert alert.is_discontinued is False\n        assert alert.urgency in [\"HIGH\", \"CRITICAL\"]"
+    }
+  ],
+  "specs": [
+    {
+      "modulo": "services/pricing.py",
+      "huella": "1111111111111111111111111111111111111111111111111111111111111111",
+      "run_origen": "20260920-100000-8730",
+      "estado": "reutilizado"
+    },
+    {
+      "modulo": "services/inventory.py",
+      "huella": "2222222222222222222222222222222222222222222222222222222222222222",
+      "run_origen": "20260920-100000-8730",
+      "estado": "reutilizado"
+    },
+    {
+      "modulo": "services/payments.py",
+      "huella": "3333333333333333333333333333333333333333333333333333333333333333",
+      "run_origen": "20260920-100000-8730",
+      "estado": "reutilizado"
+    },
+    {
+      "modulo": "services/shipping.py",
+      "huella": "4444444444444444444444444444444444444444444444444444444444444444",
+      "run_origen": "20260920-100000-8730",
+      "estado": "reutilizado"
+    },
+    {
+      "modulo": "services/cart.py",
+      "huella": "5555555555555555555555555555555555555555555555555555555555555555",
+      "run_origen": "20260925-143200-8841",
+      "estado": "regenerado"
+    },
+    {
+      "modulo": "services/discounts.py",
+      "huella": "6666666666666666666666666666666666666666666666666666666666666666",
+      "run_origen": "20260925-143200-8841",
+      "estado": "regenerado"
+    }
+  ],
+  "entorno": {
+    "imagen": "qagent-sandbox:base",
+    "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+    "plataforma": "Linux x86_64 (Docker)",
+    "python": "3.10.12",
+    "pytest": "8.2.2",
+    "limites": {
+      "cpus": 1.0,
+      "memoria": "512 MB",
+      "timeout_s": 60.0
+    }
+  },
+  "intentos": {
+    "calculate_discount": [
+      {
+        "intento": 1,
+        "decision": "accept",
+        "estado_sandbox": "ok",
+        "tipo_fallo": null,
+        "laundering_detectado": false,
+        "feedback": "Prueba aprobada en sandbox Docker (3 casos pasaron, 100% líneas, 95% ramas).",
+        "hash_error": null,
+        "cobertura": {
+          "lineas": 100.0,
+          "ramas": 95.0
+        },
+        "ejecucion": {
+          "exit_code": 0,
+          "duracion_s": 0.124,
+          "timeout": false,
+          "oom": false,
+          "salida": "tests/test_pricing.py::test_calculate_discount_normal_vip PASSED [33%]\ntests/test_pricing.py::test_calculate_discount_coupon_cap PASSED [66%]\ntests/test_pricing.py::test_calculate_discount_negative_raises PASSED [100%]\n3 passed in 0.12s",
+          "totales": {
+            "total": 3,
+            "pasaron": 3,
+            "fallaron": 0,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_calculate_discount_normal_vip",
+              "resultado": "paso",
+              "duracion_s": 0.04,
+              "archivo": "tests/test_pricing.py",
+              "linea": 6
+            },
+            {
+              "nombre": "test_calculate_discount_coupon_cap",
+              "resultado": "paso",
+              "duracion_s": 0.04,
+              "archivo": "tests/test_pricing.py",
+              "linea": 11
+            },
+            {
+              "nombre": "test_calculate_discount_negative_raises",
+              "resultado": "paso",
+              "duracion_s": 0.04,
+              "archivo": "tests/test_pricing.py",
+              "linea": 16
+            }
+          ],
+          "lineas_sin_cubrir": [],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      }
+    ],
+    "reserve_stock_atomic": [
+      {
+        "intento": 1,
+        "decision": "retry",
+        "estado_sandbox": "fallo",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": false,
+        "feedback": "AssertionError: lock no fue adquirido en Redis (assert lock.is_acquired() is True).",
+        "hash_error": "a1b2c3d4",
+        "cobertura": {
+          "lineas": 68.0,
+          "ramas": 55.0
+        },
+        "ejecucion": {
+          "exit_code": 1,
+          "duracion_s": 0.08,
+          "timeout": false,
+          "oom": false,
+          "salida": "FAILED tests/test_inventory.py::test_reserve_stock_atomic - AssertionError: assert False is True",
+          "totales": {
+            "total": 2,
+            "pasaron": 1,
+            "fallaron": 1,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_reserve_stock_atomic",
+              "resultado": "fallo",
+              "duracion_s": 0.05,
+              "archivo": "tests/test_inventory.py",
+              "linea": 12,
+              "codigo": "assert lock.is_acquired() is True",
+              "mensaje": "AssertionError: lock no fue adquirido en Redis",
+              "tipo_error": "AssertionError",
+              "esperado": "True",
+              "obtenido": "False",
+              "pila": [
+                {
+                  "archivo": "tests/test_inventory.py",
+                  "linea": 12,
+                  "detalle": "test_reserve_stock_atomic()",
+                  "codigo": "assert lock.is_acquired() is True"
+                }
+              ]
+            },
+            {
+              "nombre": "test_reserve_stock_insufficient",
+              "resultado": "paso",
+              "duracion_s": 0.03,
+              "archivo": "tests/test_inventory.py",
+              "linea": 20
+            }
+          ],
+          "lineas_sin_cubrir": [
+            28,
+            29,
+            30
+          ],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      },
+      {
+        "intento": 2,
+        "decision": "retry",
+        "estado_sandbox": "ok",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": true,
+        "feedback": "Reviewer Security Alert [Intento 2]: Se detectó relajación deliberada de aserciones ('Assertion Laundering'). El generador cambió 'assert lock.is_acquired() is True' por 'assert res is not None'. Se rechaza la prueba.",
+        "hash_error": "d4e5f6a1",
+        "cobertura": {
+          "lineas": 68.0,
+          "ramas": 55.0
+        },
+        "ejecucion": null
+      },
+      {
+        "intento": 3,
+        "decision": "stalled",
+        "estado_sandbox": "ok",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": true,
+        "feedback": "Reviewer Security Alert [Intento 3]: Misma relajación de aserciones detectada (hash repetido). Estancado por error repetido tras 3 intentos. Prueba rechazada formalmente.",
+        "hash_error": "d4e5f6a1",
+        "cobertura": {
+          "lineas": 68.0,
+          "ramas": 55.0
+        },
+        "ejecucion": null
+      }
+    ],
+    "validate_credit_card_token": [
+      {
+        "intento": 1,
+        "decision": "retry",
+        "estado_sandbox": "fallo",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": false,
+        "feedback": "ConnectionRefusedError: [Errno 111] Connection refused (127.0.0.1:8443). El código intenta conectar a red real.",
+        "hash_error": "11223344",
+        "cobertura": {
+          "lineas": 52.0,
+          "ramas": 40.0
+        },
+        "ejecucion": {
+          "exit_code": 1,
+          "duracion_s": 0.17,
+          "timeout": false,
+          "oom": false,
+          "salida": "FAILED tests/test_payments.py::test_validate_token_expired - ConnectionRefusedError: [Errno 111] Connection refused",
+          "totales": {
+            "total": 1,
+            "pasaron": 0,
+            "fallaron": 1,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_validate_token_expired",
+              "resultado": "fallo",
+              "duracion_s": 0.17,
+              "archivo": "tests/test_payments.py",
+              "linea": 9,
+              "codigo": "validate_credit_card_token(token, gateway_id='stripe_v3')",
+              "mensaje": "ConnectionRefusedError: [Errno 111] Connection refused",
+              "tipo_error": "ConnectionRefusedError",
+              "esperado": "InvalidTokenSignature",
+              "obtenido": "ConnectionRefusedError",
+              "pila": [
+                {
+                  "archivo": "tests/test_payments.py",
+                  "linea": 9,
+                  "detalle": "test_validate_token_expired()",
+                  "codigo": "validate_credit_card_token(token, gateway_id='stripe_v3')"
+                }
+              ]
+            }
+          ],
+          "lineas_sin_cubrir": [
+            48,
+            49,
+            50,
+            51
+          ],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      },
+      {
+        "intento": 2,
+        "decision": "retry",
+        "estado_sandbox": "fallo",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": false,
+        "feedback": "ConnectionRefusedError reiterado: se requiere mock de gateways.stripe.",
+        "hash_error": "55667788",
+        "cobertura": {
+          "lineas": 52.0,
+          "ramas": 40.0
+        },
+        "ejecucion": null
+      },
+      {
+        "intento": 3,
+        "decision": "stalled",
+        "estado_sandbox": "fallo",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": false,
+        "feedback": "Límite de intentos alcanzado (3/3). La prueba requiere simulación de socket/mTLS; el sandbox no tiene red (--network none).",
+        "hash_error": "99aabbcc",
+        "cobertura": {
+          "lineas": 52.0,
+          "ramas": 40.0
+        },
+        "ejecucion": null
+      }
+    ],
+    "compute_loyalty_multiplier": [
+      {
+        "intento": 1,
+        "decision": "accept",
+        "estado_sandbox": "ok",
+        "tipo_fallo": null,
+        "laundering_detectado": false,
+        "feedback": "Prueba aprobada en sandbox (1 caso pasó, 98% líneas, 92% ramas). Advertencia de Mutation Testing: Mutation Score bajo (38%).",
+        "hash_error": null,
+        "cobertura": {
+          "lineas": 98.0,
+          "ramas": 92.0
+        },
+        "ejecucion": {
+          "exit_code": 0,
+          "duracion_s": 0.095,
+          "timeout": false,
+          "oom": false,
+          "salida": "tests/test_discounts.py::test_compute_loyalty_basic PASSED\n1 passed in 0.09s",
+          "totales": {
+            "total": 1,
+            "pasaron": 1,
+            "fallaron": 0,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_compute_loyalty_basic",
+              "resultado": "paso",
+              "duracion_s": 0.095,
+              "archivo": "tests/test_discounts.py",
+              "linea": 5
+            }
+          ],
+          "lineas_sin_cubrir": [
+            14
+          ],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      }
+    ],
+    "apply_bulk_promotion": [
+      {
+        "intento": 1,
+        "decision": "retry",
+        "estado_sandbox": "fallo",
+        "tipo_fallo": "bug_codigo",
+        "laundering_detectado": false,
+        "feedback": "Oracle Traceability Check [Intento 1]: assert summary.total_discount == 20.0 -> FAILED (la función devolvió 10.0 en lugar de 20.0).",
+        "hash_error": "c1d2e3f4",
+        "cobertura": {
+          "lineas": 94.0,
+          "ramas": 88.0
+        },
+        "ejecucion": {
+          "exit_code": 1,
+          "duracion_s": 0.09,
+          "timeout": false,
+          "oom": false,
+          "salida": "FAILED tests/test_cart.py::test_apply_bulk_promotion_six_items - AssertionError: assert 10.0 == 20.0",
+          "totales": {
+            "total": 2,
+            "pasaron": 1,
+            "fallaron": 1,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_apply_bulk_promotion_six_items",
+              "resultado": "fallo",
+              "duracion_s": 0.06,
+              "archivo": "tests/test_cart.py",
+              "linea": 15,
+              "codigo": "assert summary.total_discount == 20.0",
+              "mensaje": "AssertionError: la función devolvió 10.0 pero el contrato exige 20.0",
+              "tipo_error": "AssertionError",
+              "esperado": "20.0",
+              "obtenido": "10.0",
+              "pila": [
+                {
+                  "archivo": "tests/test_cart.py",
+                  "linea": 15,
+                  "detalle": "test_apply_bulk_promotion_six_items()",
+                  "codigo": "assert summary.total_discount == 20.0"
+                }
+              ]
+            },
+            {
+              "nombre": "test_apply_bulk_promotion_empty",
+              "resultado": "paso",
+              "duracion_s": 0.03,
+              "archivo": "tests/test_cart.py",
+              "linea": 22
+            }
+          ],
+          "lineas_sin_cubrir": [],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      },
+      {
+        "intento": 2,
+        "decision": "bug_detectado",
+        "estado_sandbox": "ok",
+        "tipo_fallo": "bug_codigo",
+        "laundering_detectado": false,
+        "feedback": "Oracle Traceability Alert [Intento 2]: El Generador cambió el valor esperado a 10.0 para hacer pasar el test. Regla violada: el valor esperado solo proviene del contrato, no de la ejecución. Veredicto: BUG DETECTADO en services/cart.py::apply_bulk_promotion.",
+        "hash_error": "f4e3d2c1",
+        "cobertura": {
+          "lineas": 94.0,
+          "ramas": 88.0
+        },
+        "ejecucion": null
+      }
+    ],
+    "calculate_tax_breakdown": [
+      {
+        "intento": 1,
+        "decision": "accept",
+        "estado_sandbox": "ok",
+        "tipo_fallo": null,
+        "laundering_detectado": false,
+        "feedback": "Prueba aprobada en sandbox (100% líneas, 100% ramas).",
+        "hash_error": null,
+        "cobertura": {
+          "lineas": 100.0,
+          "ramas": 100.0
+        },
+        "ejecucion": {
+          "exit_code": 0,
+          "duracion_s": 0.11,
+          "timeout": false,
+          "oom": false,
+          "salida": "tests/test_calculate_tax_breakdown.py PASSED in 0.11s",
+          "totales": {
+            "total": 1,
+            "pasaron": 1,
+            "fallaron": 0,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_calculate_tax_breakdown_basico",
+              "resultado": "paso",
+              "duracion_s": 0.11,
+              "archivo": "tests/test_calculate_tax_breakdown.py",
+              "linea": 5
+            }
+          ],
+          "lineas_sin_cubrir": [],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      }
+    ],
+    "estimate_delivery_window": [
+      {
+        "intento": 1,
+        "decision": "accept",
+        "estado_sandbox": "ok",
+        "tipo_fallo": null,
+        "laundering_detectado": false,
+        "feedback": "Prueba aprobada en sandbox (96% líneas, 90% ramas).",
+        "hash_error": null,
+        "cobertura": {
+          "lineas": 96.0,
+          "ramas": 90.0
+        },
+        "ejecucion": {
+          "exit_code": 0,
+          "duracion_s": 0.142,
+          "timeout": false,
+          "oom": false,
+          "salida": "tests/test_estimate_delivery_window.py PASSED in 0.14s",
+          "totales": {
+            "total": 1,
+            "pasaron": 1,
+            "fallaron": 0,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_estimate_delivery_window_basico",
+              "resultado": "paso",
+              "duracion_s": 0.142,
+              "archivo": "tests/test_estimate_delivery_window.py",
+              "linea": 5
+            }
+          ],
+          "lineas_sin_cubrir": [],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      }
+    ],
+    "refund_charge_idempotent": [
+      {
+        "intento": 1,
+        "decision": "retry",
+        "estado_sandbox": "fallo",
+        "tipo_fallo": "error_test",
+        "laundering_detectado": false,
+        "feedback": "KeyError: 'idempotency_key' faltante en mock de pasarela Stripe.",
+        "hash_error": "aa11bb22",
+        "cobertura": {
+          "lineas": 85.0,
+          "ramas": 75.0
+        },
+        "ejecucion": null
+      },
+      {
+        "intento": 2,
+        "decision": "accept",
+        "estado_sandbox": "ok",
+        "tipo_fallo": null,
+        "laundering_detectado": false,
+        "feedback": "Prueba aprobada en sandbox con mock idempotente (100% líneas, 94% ramas).",
+        "hash_error": null,
+        "cobertura": {
+          "lineas": 100.0,
+          "ramas": 94.0
+        },
+        "ejecucion": {
+          "exit_code": 0,
+          "duracion_s": 0.29,
+          "timeout": false,
+          "oom": false,
+          "salida": "tests/test_payments.py::test_refund_duplicate_idempotency_key_does_not_double_charge PASSED",
+          "totales": {
+            "total": 1,
+            "pasaron": 1,
+            "fallaron": 0,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_refund_duplicate_idempotency_key_does_not_double_charge",
+              "resultado": "paso",
+              "duracion_s": 0.29,
+              "archivo": "tests/test_payments.py",
+              "linea": 5
+            }
+          ],
+          "lineas_sin_cubrir": [],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      }
+    ],
+    "check_low_stock_alerts": [
+      {
+        "intento": 1,
+        "decision": "accept",
+        "estado_sandbox": "ok",
+        "tipo_fallo": null,
+        "laundering_detectado": false,
+        "feedback": "Prueba aprobada en sandbox (92% líneas, 85% ramas).",
+        "hash_error": null,
+        "cobertura": {
+          "lineas": 92.0,
+          "ramas": 85.0
+        },
+        "ejecucion": {
+          "exit_code": 0,
+          "duracion_s": 0.135,
+          "timeout": false,
+          "oom": false,
+          "salida": "tests/test_check_low_stock_alerts.py PASSED in 0.14s",
+          "totales": {
+            "total": 1,
+            "pasaron": 1,
+            "fallaron": 0,
+            "errores": 0,
+            "omitidos": 0
+          },
+          "casos": [
+            {
+              "nombre": "test_check_low_stock_alerts_basico",
+              "resultado": "paso",
+              "duracion_s": 0.135,
+              "archivo": "tests/test_check_low_stock_alerts.py",
+              "linea": 5
+            }
+          ],
+          "lineas_sin_cubrir": [],
+          "entorno": {
+            "imagen": "qagent-sandbox:base",
+            "comando": "pytest -v --cov=services --cov-branch --cov-report=json",
+            "plataforma": "Linux x86_64 (Docker)",
+            "python": "3.10.12",
+            "pytest": "8.2.2",
+            "limites": {
+              "cpus": 1.0,
+              "memoria": "512 MB",
+              "timeout_s": 60.0
+            }
+          }
+        }
+      }
+    ]
+  }
+}
