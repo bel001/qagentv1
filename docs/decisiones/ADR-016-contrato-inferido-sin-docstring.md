@@ -124,6 +124,31 @@ Cada fase con sus pruebas, con la IA simulada y sin Docker ni red (salvo las mar
 | 6. Banco en `bench/sin_docstring/` | Banco creado; **medición pendiente** (necesita Docker y un modelo real) |
 | 7. Documentación | Hecha (AGENTS.md, este ADR); falta `docs/arquitectura.md` |
 
+### 6.2 Diagnóstico y compatibilidad de interfaz (2026-11-13)
+
+La inferencia distingue falta de contexto, ausencia de propuestas, formato inválido,
+fallo del proveedor y casos rechazados por contrato o evidencia. Un tope por módulo
+deja un motivo explícito; Preparar muestra su valor efectivo. No se recomienda
+añadir un docstring como solución universal a cualquier omisión.
+
+El análisis tree-sitter identifica de forma conservadora retornos `Component` y
+`BaseComponent` importados desde Reflex, incluidos alias y anotaciones entre comillas.
+No se deduce un framework por el nombre `rx`, la ubicación del archivo o importar
+Reflex junto a funciones de lógica. Se descartan alias reasignados o condicionales.
+Los componentes confirmados siguen visibles en Explorar, sin selección ni inferencia,
+y tampoco forman cadenas candidatas de integración interna. Los planes históricos
+no habilitan su generación por omitir el Planner.
+
+Esto informa el alcance existente; no incorpora un ejecutor Reflex ni afirma que
+esos componentes sean imposibles de probar con otras herramientas. El soporte de
+sus componentes requiere una ampliación independiente del alcance.
+
+`results.json` admite el campo opcional `total_descubiertos` antes de filtrar la
+selección. Cuenta objetivos del adaptador, incluidas las integraciones candidatas;
+Explorar conserva además el conteo de funciones. Se muestra junto a seleccionados,
+procesados, omitidos con motivo y pendientes. Los informes antiguos sin inventario
+no reciben un número de descubiertos inventado.
+
 ## 7. Aprobación
 
 - [ ] Castillo Pezo, Mateo

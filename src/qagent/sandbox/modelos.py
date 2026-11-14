@@ -124,6 +124,8 @@ class ResultadoSandbox:
     junit_xml: str | None = None
     comando: list[str] | None = None
     limites: LimitesSandbox | None = None
+    objetivo: str | None = None
+    limite_disco: bool = False
 
 
 class ErrorSandbox(Exception):

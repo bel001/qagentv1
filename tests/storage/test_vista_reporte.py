@@ -61,7 +61,7 @@ def test_los_indicadores_coinciden_con_results_json(corrida) -> None:
     assert k["cobertura"]["ramas"] == resumen["cobertura_ramas_promedio"]
     assert k["costo"]["usd"] == resumen["costo_total_usd"]
     assert k["balance"]["ok"] + k["balance"]["alertas"] == resumen["total_funciones"]
-    for funcion, objetivo in zip(v["funciones"], results["objetivos"]):
+    for funcion, objetivo in zip(v["funciones"], results["objetivos"], strict=True):
         assert funcion["cobertura_lineas"] == objetivo["metricas"]["cobertura_lineas"]
 
 

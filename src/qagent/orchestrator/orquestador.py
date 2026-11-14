@@ -454,6 +454,15 @@ class Orquestador:
                 if plan_reutilizado is None
                 else self._usar_plan_reutilizado(modulo, plan_reutilizado)
             )
+            adaptador = getattr(self.planner, "adaptador", None)
+            bloqueados = {}
+            if adaptador is not None:
+                for funcion in modulo.get("funciones", []):
+                    motivo = adaptador.motivo_funcion_no_soportada(funcion)
+                    if isinstance(motivo, str) and motivo:
+                        bloqueados[funcion["nombre"]] = motivo
+            self._motivos_omision.update(bloqueados)
+            contratos = [c for c in contratos if c.get("objetivo") not in bloqueados]
         except FalloControlado as fallo:
             error = fallo
         return PlanModulo(
@@ -529,6 +538,8 @@ class Orquestador:
                         f"Se alcanzó el presupuesto de tokens por corrida ({self.limite_tokens} tokens)."
                     )
                 self._procesar_objetivo(contrato, objetivos)
+                if any(r.get("detener_corrida") for r in objetivos[-1].revisiones):
+                    raise FalloControlado(objetivos[-1].revisiones[-1]["feedback"])
             self._transicionar(Estado.FIN, None)
             self._emitir("orquestador", None, "Corrida terminada", tipo="fin")
         except FalloControlado as error:

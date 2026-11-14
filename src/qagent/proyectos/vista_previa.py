@@ -49,6 +49,7 @@ from qagent.lenguajes import (
     fuera_de_la_corrida,
 )
 from qagent.llm.tracker import TokenTracker
+from qagent.proyectos.orientacion import orientar_funcion, resumir_orientacion
 
 _log = logging.getLogger(__name__)
 
@@ -138,6 +139,14 @@ def _recomendador_configurado() -> RecomendadorConIA | None:
         return None
 
 
+def _limite_inferencia() -> int:
+    """Lee el tope real que la corrida aplica a cada módulo."""
+    from qagent.config import cargar_configuracion
+
+    config = cargar_configuracion(simulado=True).config
+    return config.inferencia.max_funciones_por_modulo if config is not None else 20
+
+
 def _recomendar(
     vista: dict[str, Any],
     carpeta: Path,
@@ -180,7 +189,7 @@ def generar_vista_previa(
     raiz: str | os.PathLike[str],
     *,
     recomendador: RecomendadorConIA | None = None,
-    ia: bool = True,
+    ia: bool = False,
 ) -> dict[str, Any]:
     """Genera los datos de la Vista previa para un proyecto dado (HU-04).
 
@@ -254,24 +263,29 @@ def generar_vista_previa(
     infiere = _inferencia_activa(adaptador)
     es_python = adaptador.lenguaje == "python"
     for mod in resultado_ast["modulos"]:
+        mod = adaptador.orientar_modulo(carpeta, mod)
         funciones_mod: list[dict[str, Any]] = []
         for f in mod.get("funciones", []):
             doc = f.get("docstring")
+            no_soportada = adaptador.motivo_funcion_no_soportada(f)
             aviso_doc = AVISO_ORACULO_DEBIL if doc is None else None
             etiqueta_doc = ETIQUETA_FALTA_DOCSTRING if doc is None else "✓"
             funciones_mod.append(
                 {
                     **f,
+                    "orientacion_prueba": orientar_funcion(f, no_soportada),
                     "aviso_docstring": aviso_doc,
                     "etiqueta_docstring": etiqueta_doc,
                     # #275: se infiere solo lo que el contrato no alcanza a cubrir.
                     "aviso_inferencia": (
-                        AVISO_CONTRATO_INFERIDO if doc is None and infiere else None
+                        AVISO_CONTRATO_INFERIDO
+                        if doc is None and infiere and not no_soportada
+                        else None
                     ),
                     # Se puede inferir (Python sin docstring); que se haga lo decide la
                     # casilla de Preparar, con `inferencia_activa` como valor inicial.
-                    "inferible": doc is None and es_python,
-                    "critica_propuesta": f.get("ramas", 0) > 0,
+                    "inferible": doc is None and es_python and not no_soportada,
+                    "critica_propuesta": f.get("ramas", 0) > 0 and not no_soportada,
                 }
             )
         # #74: un endpoint con decisiones en su manejador se propone para profundizar,
@@ -311,11 +325,13 @@ def generar_vista_previa(
         "nombre_lenguaje": adaptador.nombre_visible,
         "framework_pruebas": adaptador.frameworks_pruebas[0],
         "inferencia_activa": infiere,
+        "limite_inferencia_por_modulo": _limite_inferencia() if es_python else None,
         "solo_e2e": solo_e2e,
         "e2e_humo_disponible": adaptador.e2e_humo_disponible,
         # J3/J4: motivo estático para bloquear el inicio (POM heredado, Gradle...).
         "motivo_no_ejecutable": adaptador.motivo_no_ejecutable(carpeta),
         "modulos": modulos_priorizados,
+        "orientacion_pruebas": resumir_orientacion(modulos_priorizados),
         "errores": errores_procesados,
         "resumen": resultado_ast["resumen"],
         # #171: React se prueba; otro framework de interfaz se avisa como
@@ -331,6 +347,6 @@ def generar_vista_previa(
         },
     }
     # #197/#200: recomendación (reglas o IA). Solo informa; no cambia la selección.
-    if not ia:
+    if ia is not True:
         return {**vista, **recomendar_para_vista(vista, carpeta)}
     return {**vista, **_recomendar(vista, carpeta, recomendador)}

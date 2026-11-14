@@ -15,6 +15,7 @@ from qagent.sandbox.imagen import (
     _buscar_dependencias,
     _imagen_existe,
     etiqueta_para_dependencias,
+    preparar_imagen,
     receta_de,
 )
 from qagent.sandbox.modelos import IMAGEN_JAVA
@@ -69,9 +70,7 @@ def test_corrida_spring_real_detecta_bug_y_omite_sin_declaracion(
     _, archivos = _buscar_dependencias(BANCO, receta)
     etiqueta = etiqueta_para_dependencias(receta.prefijo, archivos)
     if not _imagen_existe(cliente_docker, etiqueta):
-        pytest.skip(
-            "Prepara primero la imagen derivada del banco Spring; la prueba no descarga dependencias."
-        )
+        preparar_imagen(BANCO, cliente=cliente_docker, imagen=IMAGEN_JAVA)
     proyecto = tmp_path / "banco-spring"
     shutil.copytree(BANCO, proyecto)
     originales = {

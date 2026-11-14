@@ -111,11 +111,8 @@ def _conserva(original: AsercionVitest, nueva: AsercionVitest) -> bool:
         return True
     if original.negada:  # con .not, cambiar el matcher cambia el significado
         return False
-    mismo_grupo = (
-        original.matcher in IGUALDAD
-        and nueva.matcher in IGUALDAD
-        or original.matcher in EXCEPCION
-        and nueva.matcher in EXCEPCION
+    mismo_grupo = (original.matcher in IGUALDAD and nueva.matcher in IGUALDAD) or (
+        original.matcher in EXCEPCION and nueva.matcher in EXCEPCION
     )
     return mismo_grupo and nueva.rigor >= original.rigor
 

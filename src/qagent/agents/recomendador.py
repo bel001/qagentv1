@@ -118,7 +118,12 @@ def proyectar(
         )
 
     modulos = vista.get("modulos") or []
-    funciones = [f for m in modulos for f in m.get("funciones") or []]
+    funciones = [
+        f
+        for m in modulos
+        for f in m.get("funciones") or []
+        if not f.get("no_soportada")
+    ]
     endpoints = [e for m in modulos for e in m.get("endpoints") or []]
     resueltos = [e for e in endpoints if _endpoint_resuelto(e)]
     integraciones = [i for m in modulos for i in m.get("integraciones") or []]

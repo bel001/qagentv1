@@ -168,6 +168,17 @@ function botonClonado(reintentar){
 function bloquearFormularioClonado(si){
   ['url','dir','branch','shallow','browseClone'].forEach(id => { $(id).disabled = si; });
   $('cloneCancel').disabled = si;
+  if (si) {
+    $('cloneCancel').disabled = false;
+    $('cloneCancel').textContent = 'Cancelar clonado';
+    $('cloneCancel').onclick = () => {
+      if (hayPy()) window.pywebview.api.cancelar_clonado();
+      else { clearInterval(cloneTimer); finClonado({ok:false, tipo_error:'cancelado', error:'Clonado cancelado.'}); }
+    };
+  } else {
+    $('cloneCancel').textContent = 'Volver a Inicio';
+    $('cloneCancel').onclick = volverDeClonar;
+  }
 }
 
 function resetClone(){
@@ -188,7 +199,9 @@ function doClone(){
   logClone(`$ git clone ${shallow?'--depth 1 ':''}--branch ${br} ${url} ${dir}`);
   if(hayPy()){
     clonando = true; bloquearFormularioClonado(true);
-    window.pywebview.api.clonar_repositorio(url, br, dir, shallow).catch(err => finClonado({ok:false, error:String(err)}));
+    window.pywebview.api.clonar_repositorio(url, br, dir, shallow).then(r => {
+      if (!r.iniciado) finClonado({ok:false, error:r.mensaje});
+    }).catch(err => finClonado({ok:false, error:String(err)}));
     return;
   }
   // Sin pywebview (HTML abierto en el navegador): clonado simulado del demo
@@ -225,6 +238,16 @@ function avanceClonado(d){
 async function finClonado(r){
   clonando = false; bloquearFormularioClonado(false);
   if(!r.ok){
+    if(r.tipo_error === 'cancelado'){
+      clearInterval(cloneTimer);
+      reiniciarPasosClonado();
+      $('cloneTitle').textContent = 'Clonado cancelado';
+      $('cloneEstado').textContent = 'Cancelaste la descarga. Puedes volver a iniciarla.';
+      chipClonado('aviso', 'Cancelado');
+      $('cloneErr').classList.add('hide');
+      botonClonado(true);
+      vUrl(); return;
+    }
     // Se detiene el avance y se muestra el motivo; la URL y el destino se conservan para reintentar
     clearInterval(cloneTimer);
     const msg = r.error || 'No se pudo abrir el repositorio. Comprueba que contiene fuentes de un lenguaje soportado.';

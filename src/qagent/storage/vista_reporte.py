@@ -213,6 +213,7 @@ def vista_reporte(
 
     return {
         "total_seleccionados": total_seleccionados,
+        "total_descubiertos": results.get("total_descubiertos"),
         "total_elegibles": total_elegibles,
         "total_procesados": total_procesados,
         "total_pendientes": total_pendientes,

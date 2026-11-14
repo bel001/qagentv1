@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from qagent.sandbox.modelos import LimitesSandbox, ResultadoSandbox
+from qagent.xml_seguro import parsear_xml
 
 #: Resultados posibles de un caso.
 PASO, FALLO, ERROR, OMITIDO = "paso", "fallo", "error", "omitido"
@@ -160,7 +161,7 @@ def parsear_junit(xml: str) -> InformePytest:
     if "<!DOCTYPE" in xml or "<!ENTITY" in xml:
         raise JUnitInvalido("El junit.xml declara entidades; no se lee.")
     try:
-        raiz = ET.fromstring(xml)
+        raiz = parsear_xml(xml)
     except ET.ParseError as error:
         raise JUnitInvalido(f"El junit.xml está mal formado: {error}") from error
 

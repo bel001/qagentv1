@@ -17,6 +17,7 @@ from qagent.sandbox.mutacion import (
     Sobreviviente,
     puntuacion,
 )
+from qagent.xml_seguro import parsear_xml
 
 LIMITE_XML_PIT = 2_000_000
 DETECTADOS = frozenset({"KILLED", "TIMED_OUT"})
@@ -57,7 +58,7 @@ def interpretar_pit(
             raise ValueError("El XML de PIT está vacío o supera el tamaño permitido.")
         if "<!DOCTYPE" in xml or "<!ENTITY" in xml:
             raise ValueError("El XML de PIT declara entidades no permitidas.")
-        raiz = ET.fromstring(xml)
+        raiz = parsear_xml(xml)
         if raiz.tag != "mutations":
             raise ValueError("Se esperaba la raíz mutations de PIT.")
         seleccion = {par: nombre for nombre, par in objetivos.items()}

@@ -100,6 +100,9 @@ def _analizar_entrada(
         adaptador = adaptador_del_proyecto(ruta)
     except LenguajeNoSoportado as error:
         raise ErrorCorrida(str(error)) from error
+    if motivo := adaptador.motivo_no_ejecutable(ruta):
+        _detener_entrada(resumen, almacen, tipos, motivo, avisar, avisar_entorno)
+        return None
     version_python = None
     if adaptador.lenguaje == "python" and hasattr(adaptador, "resolver_version_python"):
         try:
@@ -120,6 +123,7 @@ def _analizar_entrada(
         _detener_entrada(resumen, almacen, tipos, sin_espacio, avisar, avisar_entorno)
         return None
     analisis = adaptador.analizar(ruta)
+    resumen.total_descubiertos = sum(_cifras_de_modulos(analisis["modulos"]))
     modulos = [
         _con_fuente(ruta, m) for m in filtrar_modulos(analisis["modulos"], seleccion)
     ]
@@ -261,7 +265,12 @@ def _detener_por_compilacion(
         for o in resultado.objetivos
         for r in (o.revisiones or [])
     )
-    if "error_compilacion_proyecto" not in feedbacks.lower():
+    if not any(
+        r.get("detener_corrida")
+        or r.get("motivo_sin_veredicto") == "error_compilacion_proyecto"
+        for o in resultado.objetivos
+        for r in (o.revisiones or [])
+    ):
         return False
     detalle_javac = next(
         (
@@ -272,10 +281,22 @@ def _detener_por_compilacion(
         "",
     )
     resumen.tipo_terminacion = "detenida_error"
-    resumen.motivo = f"{resultado.modulo}: error_compilacion_proyecto" + (
+    causa = next(
+        (
+            r.get("motivo_sin_veredicto")
+            for o in resultado.objetivos
+            for r in (o.revisiones or [])
+            if r.get("detener_corrida")
+        ),
+        "error_compilacion_proyecto",
+    )
+    resumen.motivo = f"{resultado.modulo}: {causa}" + (
         f" — {detalle_javac}" if detalle_javac else ""
     )
-    avisar("El proyecto Java no compila; no se procesarán más módulos.", "fallo")
+    avisar(
+        "El entorno del proyecto impide continuar; no se procesarán más módulos.",
+        "fallo",
+    )
     return True
 
 

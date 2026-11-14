@@ -12,6 +12,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from qagent.xml_seguro import parsear_xml
+
 LIMITE_XML_JACOCO = 5_000_000
 LIMITE_DATOS = 200_000
 _DOCTYPE = re.compile(
@@ -63,7 +65,7 @@ def interpretar_jacoco(xml: str) -> dict[str, Any] | None:
     if "<!DOCTYPE" in xml or "<!ENTITY" in xml:
         raise CoberturaJacocoInvalida("JaCoCo declara entidades o una DTD no admitida.")
     try:
-        raiz = ET.fromstring(xml)
+        raiz = parsear_xml(xml)
     except ET.ParseError as error:
         raise CoberturaJacocoInvalida("XML JaCoCo mal formado.") from error
     if raiz.tag != "report":

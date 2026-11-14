@@ -127,6 +127,27 @@ Los modelos por defecto del equipo no cambian: siguen siendo los de `src/qagent/
 - **DeepSeek es un proveedor seleccionable** (HU-36). Se elige igual que los demás, con `proveedor = "deepseek"` en la sección de un agente y su clave en `~/.qagent/.env`. No es el modelo por defecto de ningún agente.
 - **Cada persona puede cambiar los modelos** desde la pantalla Configuración (HU-30). La elección se guarda en `~/.qagent/config.local.toml`, que reemplaza la sección del agente en `config.toml` sin modificarla ni versionarse. Los precios que se usan para el costo son los de la sección elegida.
 
+## Actualización de seguridad y fuente de precios (2026-11-13)
+
+El catálogo seleccionable está en `[proveedores.*]` del mismo
+`src/qagent/config/config.toml` que los valores del equipo. El antiguo
+`llm/proveedores.toml` solo conserva un aviso de compatibilidad y no aporta precios.
+Una prueba transversal comprueba que los modelos predeterminados coincidan con ese
+catálogo. La pantalla muestra los precios efectivos de cada agente, incluidas las
+elecciones personales.
+
+No se permite guardar una selección con precio desconocido. El cliente real rechaza
+una tarifa cero salvo que el catálogo confirme expresamente un modelo gratuito.
+El límite de tokens por corrida es una segunda barrera independiente del precio.
+
+Los IDs predeterminados se contrastaron con la documentación pública del proveedor;
+no se hicieron peticiones pagadas para comprobar acceso de una cuenta concreta.
+Las tablas históricas anteriores describen la decisión inicial, no sustituyen el
+catálogo operativo. Referencias actuales:
+[MiMo: modelos y tarifas](https://mimo.mi.com/docs/en-US/pricing),
+[GPT-6 Luna](https://developers.openai.com/api/docs/models/gpt-6-luna) y
+[Gemini: tarifas](https://ai.google.dev/gemini-api/docs/pricing).
+
 ## Fuentes
 
 - [Anthropic — Pricing](https://platform.claude.com/docs/en/about-claude/pricing)

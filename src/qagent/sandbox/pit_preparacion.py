@@ -14,6 +14,7 @@ from tree_sitter import Node
 
 from qagent.lenguajes.treesitter import obtener_parser
 from qagent.sandbox.pit_comando import comando_pit
+from qagent.xml_seguro import parsear_xml
 
 NS = "http://maven.apache.org/POM/4.0.0"
 POM_NOMBRE = ".qagent-pit.xml"
@@ -198,7 +199,7 @@ def _xml_seguro(texto: str) -> ET.Element:
     """Parsea un POM sin resolver entidades ni aceptar declaraciones externas."""
     if "<!DOCTYPE" in texto or "<!ENTITY" in texto:
         raise ValueError("El POM declara entidades no admitidas.")
-    return ET.fromstring(texto)
+    return parsear_xml(texto)
 
 
 def _hijo(padre: ET.Element, nombre: str) -> ET.Element:

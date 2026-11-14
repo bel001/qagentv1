@@ -55,7 +55,12 @@ def huellas_de_objetivos(raiz: str | Path) -> dict[tuple[str, str], str]:
     ]
     for ruta in sorted(raiz.rglob("*")):
         adaptador = _adaptador_de_archivo(adaptadores, ruta.name)
-        if adaptador is None or not ruta.is_file():
+        if (
+            adaptador is None
+            or ruta.is_symlink()
+            or not ruta.resolve().is_relative_to(raiz.resolve())
+            or not ruta.is_file()
+        ):
             continue
         partes = ruta.relative_to(raiz).parts
         if any(p.startswith(".") or p in ignorados for p in partes[:-1]):
@@ -297,6 +302,7 @@ def ejecutar_regresion(
     )
     tracker = TokenTracker(configuracion.agentes)
     resultados: list[ResultadoCorrida] = []
+    tipos_prueba: list[str] = []
     huellas = huellas_de_objetivos(raiz)
     marcadas = (
         None
@@ -348,6 +354,7 @@ def ejecutar_regresion(
 
     try:
         specs = _specs_elegidas(_specs_aprobadas(almacen), seleccion)
+        tipos_prueba = sorted({s["contrato"].get("tipo", "funcion") for s in specs})
         if not specs:
             raise RuntimeError("No hay pruebas aprobadas vigentes para Regresion.")
         resumen.total_seleccionados = len(specs)
@@ -409,9 +416,12 @@ def ejecutar_regresion(
                 )
                 continue
             adaptador = adaptador_de_contrato(contrato)
+            if motivo := adaptador.motivo_no_ejecutable(raiz):
+                raise ValueError(motivo)
             if imagen is None:
                 emitir("Preparando sandbox Docker sin red; no se llamara a ninguna IA")
                 imagen = _imagen_de_regresion(preparar_imagen, raiz, adaptador)
+                resumen.imagen_docker = imagen
             emitir(f"Reejecutando prueba aprobada: {objetivo} (sin IA)", modulo)
             obj, dur_etapas = _objetivo_reejecutado(
                 raiz,
@@ -483,7 +493,7 @@ def ejecutar_regresion(
     resumen.costo_usd = 0.0
     resumen.duracion_s = resumen.duracion_s or segundos(inicio, reloj())
     resumen.fin = resumen.fin or ahora()
-    _cerrar_run(almacen, resumen, ["funcion", "endpoint"])
+    _cerrar_run(almacen, resumen, tipos_prueba)
     emitir(
         f"Regresion terminada sin IA: {resumen.aceptadas} aprobadas, "
         f"{resumen.requieren_corrida_nueva} requieren corrida nueva, "

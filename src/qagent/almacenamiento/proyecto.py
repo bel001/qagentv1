@@ -88,7 +88,14 @@ def migrar_carpeta_anterior(raiz: str | Path) -> bool:
 # "vigente" se reutiliza en regresión; "obsoleta" cuando el código cambió (HU-24).
 ESTADOS_SPEC = ("vigente", "obsoleta")
 ACCIONES_SPEC_MODULO = ("generado", "reutilizado", "regenerado")
-TIPOS_PRUEBA = ("funcion", "endpoint", "integracion", "arquitectura", "e2e_humo")
+TIPOS_PRUEBA = (
+    "funcion",
+    "endpoint",
+    "componente",
+    "integracion",
+    "arquitectura",
+    "e2e_humo",
+)
 CAMPOS_RUN = (
     "run_id",
     "inicio",

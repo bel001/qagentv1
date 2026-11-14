@@ -74,10 +74,6 @@ DIRECTORIOS_IGNORADOS = frozenset(
         "node_modules",
         "site-packages",
         "mutants",
-        "multilenguaje",
-        "dependencias",
-        "integracion",  # banco de #245: se abre como proyecto aparte
-        "sin_docstring",  # banco de #275: se abre como proyecto aparte
     }
 )
 #: Scripts de medición empírica versionados en bench/ que no forman parte del código a probar.
@@ -272,6 +268,16 @@ def analizar_proyecto(raiz: str | os.PathLike[str]) -> dict[str, Any]:
         except _ERRORES_LECTURA as causa:
             errores.append(_error(relativa, causa))
     _agregar_rutas(modulos, arboles)
+    # Un paquete local con ese nombre hace ambiguo el import absoluto: no se excluye.
+    if not any(
+        (carpeta / prefijo / nombre).exists()
+        for prefijo in ("", "src")
+        for nombre in ("reflex.py", "reflex")
+    ):
+        from qagent.analysis.interfaz_python import marcar_componentes_reflex
+
+        for modulo in modulos:
+            marcar_componentes_reflex(modulo, arboles[modulo["ruta"]])
 
     return {
         "modulos": modulos,

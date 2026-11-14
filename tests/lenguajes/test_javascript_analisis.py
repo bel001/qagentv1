@@ -130,16 +130,21 @@ def test_ignora_dependencias_compilados_y_pruebas_existentes(tmp_path: Path) -> 
 
 
 def test_carpetas_ignoradas_compartidas_con_python(tmp_path: Path) -> None:
-    """``dependencias/`` (#196) también se omite en JS/TS: la lista es compartida."""
+    """Omite cachés y paquetes instalados; conserva el código en dependencias/."""
     _escribir(
         tmp_path,
         {
             "src/dependencias/pago.ts": "export function pagar(): void {}",
             "src/pago.ts": "export function pagar(): void {}",
+            "node_modules/paquete/pago.ts": "export function pagar(): void {}",
+            "__pycache__/pago.ts": "export function pagar(): void {}",
         },
     )
     estructura = TypeScriptAdapter().analizar(tmp_path)
-    assert [m["ruta"] for m in estructura["modulos"]] == ["src/pago.ts"]
+    assert [m["ruta"] for m in estructura["modulos"]] == [
+        "src/dependencias/pago.ts",
+        "src/pago.ts",
+    ]
 
 
 @pytest.mark.parametrize(

@@ -45,7 +45,12 @@ def clasificar_java(resultado: ResultadoSandbox) -> Clasificacion | None:
     """
 
     def sin(motivo: str, detalle: str) -> Clasificacion:
-        return Clasificacion("entorno", detalle, motivo)
+        return Clasificacion(
+            "entorno",
+            detalle,
+            motivo,
+            detener_corrida=motivo == "error_compilacion_proyecto",
+        )
 
     if resultado.timed_out:
         return sin("timeout_sandbox", "Java excedió el tiempo máximo del sandbox.")
@@ -104,11 +109,21 @@ def clasificar_java(resultado: ResultadoSandbox) -> Clasificacion | None:
             "UnsupportedClassVersionError",
             "VerifyError",
             "ExceptionInInitializerError",
-            "IllegalStateException",
             "MockitoException",
             "SurefireBooterForkException",
         }
-        if tipos_error and tipos_error <= entorno:
+        errores = [c for c in informe["casos"] if c["resultado"] == "error"]
+        objetivo = getattr(resultado, "objetivo", None)
+        en_objetivo = not objetivo or any(
+            re.search(
+                r"\bat\s+(?:[\w$]+\.)*"
+                + r"[.$]".join(re.escape(parte) for parte in objetivo.split("."))
+                + r"\(",
+                c.get("traza") or "",
+            )
+            for c in errores
+        )
+        if (tipos_error and tipos_error <= entorno) or not en_objetivo:
             return sin(
                 "error_ejecucion_pruebas",
                 "JUnit informó errores técnicos; no prueban un incumplimiento del contrato.",
@@ -166,19 +181,30 @@ class ReglasRevisionJava(ReglasGeneracionJava):
     ) -> tuple[int, int] | None:
         """Ubica un método por clase y nombre; una sobrecarga no elige al azar."""
         # J10: no se analiza todo el proyecto; se lee solo el archivo del objetivo.
-        arbol = obtener_parser("java").parse((raiz / modulo).read_bytes()).root_node
-        pendientes = [arbol]
-        while pendientes:
-            nodo = pendientes.pop()
+        try:
+            arbol = obtener_parser("java").parse((raiz / modulo).read_bytes()).root_node
+        except OSError:
+            return None
+        encontrados = []
+
+        def visitar(nodo, clase=""):
+            if nodo.type in {
+                "class_declaration",
+                "interface_declaration",
+                "enum_declaration",
+                "record_declaration",
+            }:
+                simple = nodo.child_by_field_name("name").text.decode("utf-8")
+                clase = f"{clase}.{simple}" if clase else simple
             if nodo.type == "method_declaration":
-                nombre_nodo = next(
-                    (h for h in nodo.named_children if h.type == "identifier"), None
-                )
-                nombre_simple = nombre.rsplit(".", 1)[-1]
-                if (
-                    nombre_nodo is not None
-                    and nombre_nodo.text.decode("utf-8") == nombre_simple
-                ):
-                    return nodo.start_point.row + 1, nodo.end_point.row + 1
-            pendientes.extend(nodo.named_children)
-        return None
+                simple = nodo.child_by_field_name("name").text.decode("utf-8")
+                if f"{clase}.{simple}" == nombre:
+                    encontrados.append(
+                        (nodo.start_point.row + 1, nodo.end_point.row + 1)
+                    )
+                return
+            for hijo in nodo.named_children:
+                visitar(hijo, clase)
+
+        visitar(arbol)
+        return encontrados[0] if len(encontrados) == 1 else None

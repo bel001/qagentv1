@@ -111,6 +111,8 @@ class DesktopAPI(
         self._corrida: threading.Thread | None = None  # corrida real en curso
         self._corrida_lock = threading.Lock()  # evita dos inicios simultáneos (A3)
         self._cancelar_corrida = threading.Event()
+        self._clonando = False
+        self._cancelar_clonado = threading.Event()
         # #275 (ADR-016): la corrida espera aquí a que la persona revise los contratos
         # inferidos; `responder_revision_inferidos` la despierta.
         self._revision_evento: threading.Event | None = None

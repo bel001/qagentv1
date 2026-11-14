@@ -46,7 +46,7 @@ RUN apt-get update \
 # proveedores quedan en el repositorio local y luego funcionan sin red.
 COPY java/ /opt/qagent/java/
 RUN cd /opt/qagent/java/calentamiento \
-    && mvn verify org.pitest:pitest-maven:mutationCoverage \
+    && mvn dependency:go-offline verify org.pitest:pitest-maven:mutationCoverage \
     && mkdir -p /opt/qagent/archunit \
     && mvn dependency:copy-dependencies \
         -DincludeGroupIds=com.tngtech.archunit,org.slf4j \

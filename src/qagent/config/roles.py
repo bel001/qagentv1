@@ -110,6 +110,7 @@ def listar_proveedores() -> list[dict[str, Any]]:
                     "salida_usd_m": m.salida_usd_m,
                 }
                 for m in p.modelos
+                if not p.genera_texto or m.precio_confirmado
             ],
         }
         for p in catalogo().values()
@@ -189,8 +190,12 @@ def _estado_rol(
         "genera_texto": tipo == "texto",
         "en_catalogo": modelo is not None,
         "precio_confirmado": bool(modelo and modelo.precio_confirmado),
-        "entrada_usd_m": modelo.entrada_usd_m if modelo else 0.0,
-        "salida_usd_m": modelo.salida_usd_m if modelo else 0.0,
+        "entrada_usd_m": tabla.get(
+            "precio_entrada_usd_m", modelo.entrada_usd_m if modelo else 0.0
+        ),
+        "salida_usd_m": tabla.get(
+            "precio_salida_usd_m", modelo.salida_usd_m if modelo else 0.0
+        ),
         "variable": variable or variable_de_agente(agente, pid) or "",
         "tiene_clave": bool(clave),
         "clave_enmascarada": enmascarar(clave),
@@ -441,6 +446,10 @@ def _validar_eleccion(agente: str, proveedor: str, modelo: str) -> Proveedor:
         raise ErrorRol(f"Proveedor no disponible: {proveedor}.")
     if datos.modelo(modelo) is None:
         raise ErrorRol(f"El modelo {modelo} no está en la lista de {datos.nombre}.")
+    if not datos.modelo(modelo).precio_confirmado:
+        raise ErrorRol(
+            "El modelo no tiene precio confirmado; actualiza el catálogo antes de elegirlo."
+        )
     return datos
 
 

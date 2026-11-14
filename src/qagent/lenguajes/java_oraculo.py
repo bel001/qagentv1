@@ -444,7 +444,7 @@ def _argumentos_asercion_validos(asercion: AsercionJava) -> bool:
         return len(args) == base
     valores = [literal(a, asercion.alias) for a in extras]
     if asercion.tipo in {"igualdad", "array"} and isinstance(valores[0], Decimal):
-        return len(valores) == 1 or len(valores) == 2 and isinstance(valores[1], str)
+        return len(valores) == 1 or (len(valores) == 2 and isinstance(valores[1], str))
     return len(valores) == 1 and isinstance(valores[0], str)
 
 
@@ -616,16 +616,20 @@ def _mockito(
             receptor = texto(llamada.child_by_field_name("object"))
             valido = (
                 receptor == "org.mockito.Mockito"
-                or receptor == "Mockito"
-                and any(i == "importorg.mockito.Mockito;" for i in imports)
-                or not receptor
-                and any(
-                    i
-                    in {
-                        "importstaticorg.mockito.Mockito.mock;",
-                        "importstaticorg.mockito.Mockito.*;",
-                    }
-                    for i in imports
+                or (
+                    receptor == "Mockito"
+                    and any(i == "importorg.mockito.Mockito;" for i in imports)
+                )
+                or (
+                    not receptor
+                    and any(
+                        i
+                        in {
+                            "importstaticorg.mockito.Mockito.mock;",
+                            "importstaticorg.mockito.Mockito.*;",
+                        }
+                        for i in imports
+                    )
                 )
             )
             if not valido or llamada.start_byte not in usados:
@@ -634,16 +638,17 @@ def _mockito(
             receptor = texto(llamada.child_by_field_name("object"))
             proveedor = (
                 receptor == "org.mockito.Mockito"
-                or receptor == "Mockito"
-                and "importorg.mockito.Mockito;" in imports
-                or not receptor
-                and any(
-                    i
-                    in {
-                        "importstaticorg.mockito.Mockito.when;",
-                        "importstaticorg.mockito.Mockito.*;",
-                    }
-                    for i in imports
+                or (receptor == "Mockito" and "importorg.mockito.Mockito;" in imports)
+                or (
+                    not receptor
+                    and any(
+                        i
+                        in {
+                            "importstaticorg.mockito.Mockito.when;",
+                            "importstaticorg.mockito.Mockito.*;",
+                        }
+                        for i in imports
+                    )
                 )
             )
             if not proveedor:

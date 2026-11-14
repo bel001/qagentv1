@@ -56,9 +56,31 @@ class Transporte:
 
 
 @pytest.fixture
-def rutas(tmp_path: Path) -> tuple[Path, Path]:
+def rutas(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     """config.toml del equipo y un .env casi vacío, en una carpeta temporal."""
     config = tmp_path / "config.toml"
+    # Este banco prueba persistencia, claves y errores del transporte. Sus modelos
+    # tienen tarifas sintéticas; no depende de precios comerciales incompletos.
+    from dataclasses import replace
+
+    from qagent.config import roles
+
+    datos = {
+        pid: replace(
+            p,
+            modelos=tuple(
+                replace(
+                    m,
+                    precio_confirmado=True,
+                    entrada_usd_m=m.entrada_usd_m if m.precio_confirmado else 0.1,
+                    salida_usd_m=m.salida_usd_m if m.precio_confirmado else 0.2,
+                )
+                for m in p.modelos
+            ),
+        )
+        for pid, p in roles.catalogo().items()
+    }
+    monkeypatch.setattr(roles, "catalogo", lambda: datos)
     config.write_text(CONFIG_EQUIPO, encoding="utf-8")
     env = tmp_path / ".env"
     env.write_text("# claves\nQAGENT_FAKE_LLM=0\n", encoding="utf-8")

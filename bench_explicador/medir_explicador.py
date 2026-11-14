@@ -668,7 +668,7 @@ def argumentos(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--log-corrida",
         type=Path,
-        help="log.json de una corrida real del banco, para el % del costo total",
+        help="log.json de una corrida real del banco, para el %% del costo total",
     )
     parser.add_argument("--casos", type=Path, default=CASOS)
     parser.add_argument("--salida", type=Path, help="carpeta de resultados")

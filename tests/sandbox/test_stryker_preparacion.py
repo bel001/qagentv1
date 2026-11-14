@@ -33,6 +33,48 @@ export function otra(x: string): string {
 """
 
 
+def test_config_reservada_no_sobrescribe_archivos_del_proyecto(tmp_path: Path) -> None:
+    archivo = tmp_path / ".qagent-stryker.json"
+    archivo.write_text("original", encoding="utf-8")
+    with pytest.raises(ValueError, match="reservada"):
+        escribir_config_stryker(tmp_path, "calc.ts", {"calcular": (1, 3)})
+    assert archivo.read_text(encoding="utf-8") == "original"
+
+
+@pytest.mark.parametrize("destino", ["carpeta", "test", "config"])
+def test_preparacion_no_escribe_a_traves_de_enlaces(
+    tmp_path: Path, destino: str
+) -> None:
+    copia = tmp_path / "proyecto"
+    copia.mkdir()
+    pruebas = tmp_path / "pruebas"
+    pruebas.mkdir()
+    (pruebas / "calc.py").write_text("assert true", encoding="utf-8")
+    externo = tmp_path / "externo"
+    externo.mkdir()
+    archivo = externo / "original.txt"
+    archivo.write_text("original", encoding="utf-8")
+    carpeta = copia / CARPETA_PRUEBAS_STRYKER
+    try:
+        if destino == "carpeta":
+            carpeta.symlink_to(externo, target_is_directory=True)
+        elif destino == "test":
+            carpeta.mkdir()
+            (carpeta / "calc.test.ts").symlink_to(archivo)
+        else:
+            (copia / ".qagent-stryker.json").symlink_to(archivo)
+    except OSError:
+        pytest.skip("El sistema no permite crear enlaces simbólicos")
+
+    with pytest.raises(ValueError):
+        if destino == "config":
+            escribir_config_stryker(copia, "calc.ts", {"calcular": (1, 3)})
+        else:
+            preparar_pruebas_stryker(copia, pruebas, "calc.ts")
+    assert archivo.read_text(encoding="utf-8") == "original"
+    assert sorted(p.name for p in externo.iterdir()) == ["original.txt"]
+
+
 @pytest.mark.parametrize("archivo_config", list(CONFIGURACIONES_PROPIAS))
 def test_detecta_configuracion_propia_archivos(
     tmp_path: Path, archivo_config: str

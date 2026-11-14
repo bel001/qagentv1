@@ -62,8 +62,8 @@ def _cliente_simulado(estado: dict | None = None, oom: bool = False) -> MagicMoc
     """Crea un cliente Docker simulado cuyo contenedor termina con `estado`."""
     contenedor = MagicMock()
     contenedor.wait.return_value = estado or {"StatusCode": 0}
-    contenedor.logs.side_effect = lambda stdout, stderr: (
-        b"salida" if stdout else b"errores"
+    contenedor.logs.side_effect = lambda stdout, stderr, stream: iter(
+        [b"salida" if stdout else b"errores"]
     )
     contenedor.attrs = {"State": {"OOMKilled": oom}}
     cliente = MagicMock()

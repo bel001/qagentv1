@@ -226,12 +226,14 @@ parent { number title url }
 def _pedir(
     url: str, token: str, datos: Any = None, metodo: str = "POST", extra=None
 ) -> Any:
+    if not url.startswith("https://"):
+        raise ValueError("Las APIs de GitHub y Notion requieren HTTPS.")
     cabeceras = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     cabeceras.update(extra or {})
     cuerpo = None if datos is None else json.dumps(datos).encode("utf-8")
-    pedido = urllib.request.Request(url, data=cuerpo, headers=cabeceras, method=metodo)
+    pedido = urllib.request.Request(url, data=cuerpo, headers=cabeceras, method=metodo)  # noqa: S310 -- HTTPS verificado
     try:
-        with urllib.request.urlopen(pedido, timeout=30) as respuesta:
+        with urllib.request.urlopen(pedido, timeout=30) as respuesta:  # noqa: S310 -- HTTPS verificado
             return json.loads(respuesta.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detalle = error.read().decode("utf-8", "replace")

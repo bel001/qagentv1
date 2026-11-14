@@ -117,6 +117,7 @@ class Clasificacion:
     tipo: str
     detalle: str
     motivo_sin_veredicto: str | None = None
+    detener_corrida: bool = False
 
 
 class ReglasRevision(Protocol):
@@ -314,6 +315,14 @@ class LanguageAdapter(ABC):
             NotADirectoryError: si ``raiz`` no es una carpeta.
         """
 
+    def motivo_funcion_no_soportada(self, funcion: dict[str, Any]) -> str | None:
+        """Motivo estático para no planificar una función; None si puede intentarse."""
+        return None
+
+    def orientar_modulo(self, raiz: Path, modulo: dict[str, Any]) -> dict[str, Any]:
+        """Añade señales opcionales para la selección, sin modificar contratos del Planner."""
+        return modulo
+
     def objetivos(self, estructura: Estructura) -> list[dict[str, str]]:
         """Lista las funciones y endpoints que se pueden probar.
 
@@ -325,6 +334,8 @@ class LanguageAdapter(ABC):
         for modulo in estructura.get("modulos", []):
             ruta = modulo["ruta"]
             for funcion in modulo.get("funciones", []):
+                if self.motivo_funcion_no_soportada(funcion):
+                    continue
                 encontrados.append(
                     {"modulo": ruta, "tipo": "funcion", "objetivo": funcion["nombre"]}
                 )
@@ -416,7 +427,7 @@ class LanguageAdapter(ABC):
 
     def cobertura_de_objetivo(
         self, cobertura: dict[str, Any] | None, modulo: str, objetivo: str
-    ) -> dict[str, float | None] | None | NotImplementedType:
+    ) -> dict[str, float | None] | NotImplementedType | None:
         """Contadores exactos del objetivo; NotImplemented usa el cálculo por líneas.
 
         None significa que no hay medición del objetivo, sin sustituirla por

@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import tempfile
 import threading
 import time
+from collections import deque
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +33,7 @@ from typing import Any
 
 import docker
 from docker.errors import APIError, BuildError, ImageNotFound
+from packaging.requirements import InvalidRequirement, Requirement
 
 from qagent.sandbox import espacio, gestores_js
 from qagent.sandbox.cliente import obtener_cliente
@@ -48,6 +51,7 @@ from qagent.sandbox.modelos import (
     es_imagen_base_python,
     version_de_imagen_base,
 )
+from qagent.sandbox.plazos import iterar_con_plazo
 
 registro = logging.getLogger(__name__)
 
@@ -96,7 +100,7 @@ _NPM_INSTALADO = re.compile(r"^added\s+(\d+)\s+packages?\b")
 _PNPM_PAQUETES = re.compile(r"^Packages:\s*\+(\d+)\b")
 _BUILD_EXITOSO = re.compile(r"^(?:\[INFO\]\s+)?BUILD SUCCESS(?:FUL)?\b")
 
-_CARPETA_DEPENDENCIAS = "/tmp/qagent-deps"
+_CARPETA_DEPENDENCIAS = "/tmp/qagent-deps"  # noqa: S108 -- ruta interna de la imagen Docker
 
 #: Label de Docker con la huella de la receta (Dockerfile y recursos) que construyó una
 #: imagen base. Si la receta cambia, la imagen local queda desactualizada (#250).
@@ -187,18 +191,22 @@ def revisar_requirements(contenido: bytes) -> None:
     Raises:
         ErrorConstruccionImagen: si el archivo trae una opción prohibida.
     """
-    for numero, linea in enumerate(
-        contenido.decode("utf-8", "replace").splitlines(), start=1
-    ):
-        limpia = linea.strip()
-        if not limpia.startswith("-"):
+    texto = contenido.decode("utf-8-sig").replace("\\\r\n", " ").replace("\\\n", " ")
+    for numero, linea in enumerate(texto.splitlines(), start=1):
+        limpia = linea.split(" #", 1)[0].strip()
+        if not limpia or limpia.startswith("#") or limpia == "--require-hashes":
             continue
-        opcion = limpia.split("=", 1)[0].split(" ", 1)[0].strip().lower()
-        if opcion in OPCIONES_PIP_PROHIBIDAS:
+        requisito = re.sub(r"\s+--hash=sha256:[a-fA-F0-9]+\b", "", limpia)
+        try:
+            parsed = Requirement(requisito)
+            seguro = parsed.url is None
+        except InvalidRequirement:
+            seguro = False
+        if not seguro:
             raise ErrorConstruccionImagen(
-                "El requirements.txt del proyecto usa una opción de pip no permitida "
-                f"({opcion}, línea {numero}): QAgent instala las dependencias con "
-                "ruedas oficiales y sin cambiar de índice.",
+                "El requirements.txt usa una opción de pip no permitida o una fuente no segura "
+                f"(línea {numero}): usa nombres y versiones de PyPI, sin URLs, "
+                "rutas locales, includes, editables ni cambios de índice.",
                 "",
             )
 
@@ -245,6 +253,13 @@ def _dockerfile_maven(base: str, archivos: Mapping[str, bytes]) -> str:
         f"    && cd / && rm -rf {_CARPETA_DEPENDENCIAS}\n"
         "USER sandbox\n"
     )
+
+
+def _recolectar_maven(raiz: Path) -> dict[str, bytes]:
+    """Delega al adaptador Java la preparación estática de sus dependencias."""
+    from qagent.lenguajes.java_ejecucion import recolectar_dependencias
+
+    return recolectar_dependencias(raiz)
 
 
 def _dockerfile_gradle(base: str, archivos: Mapping[str, bytes]) -> str:
@@ -342,6 +357,7 @@ RECETAS: dict[str, RecetaImagen] = {
                 ("pom.xml",),
                 (),
                 _dockerfile_maven,
+                recolectar=_recolectar_maven,
                 explicar_fallo=_explicar_fallo_maven,
             ),
             Dependencias(
@@ -473,19 +489,22 @@ def huella_receta(
     return resumen.hexdigest()[:16]
 
 
-def imagen_desactualizada(cliente: docker.DockerClient, imagen: str) -> bool:
+def imagen_desactualizada(
+    cliente: docker.DockerClient, imagen: str, *, actual: Any = None
+) -> bool:
     """True si la imagen base existe pero no se construyó con su receta actual.
 
     Una imagen sin el label `LABEL_RECETA` (construida antes de #250) cuenta como
     desactualizada. Si la imagen no existe, devuelve False: no hay nada que actualizar.
     """
     try:
-        actual = cliente.images.get(imagen)
+        actual = actual if actual is not None else cliente.images.get(imagen)
     except ImageNotFound:
         return False
     receta = receta_de(imagen)
     esperada = huella_receta(receta, _buildargs_de(receta.imagen))
-    return (actual.labels or {}).get(LABEL_RECETA) != esperada
+    labels = actual.labels or {}
+    return isinstance(labels, dict) and labels.get(LABEL_RECETA) != esperada
 
 
 def _buildargs_de(imagen: str) -> dict[str, str] | None:
@@ -542,7 +561,8 @@ def etiqueta_para_dependencias(
     if prefijo == "java-" and "pom.xml" in archivos:
         # #174: Surefire necesita el launcher de la versión del engine resuelto.
         # No reutilizar derivadas anteriores que solo usaban go-offline/resolve.
-        huella.update(b"maven-junit-launcher-v3\0")
+        huella.update(b"maven-junit-tools-v4\0")
+        huella.update(huella_receta(RECETAS[IMAGEN_JAVA]).encode())
     if prefijo == "browser-":
         # Invalida la primera receta de #186, que heredaba por error USER sandbox.
         huella.update(b"browser-runner-exit-v3\0")
@@ -550,6 +570,8 @@ def etiqueta_para_dependencias(
         # #272: gestor del proyecto, sin scripts y con workspaces. Las derivadas de
         # antes ejecutaban los scripts del proyecto: no se reutilizan.
         huella.update(b"js-gestores-v1\0")
+        base = IMAGEN_NODE if prefijo == "node-" else IMAGEN_NAVEGADOR
+        huella.update(huella_receta(RECETAS[base]).encode())
     for nombre in sorted(archivos):
         huella.update(nombre.encode("utf-8") + b"\0" + archivos[nombre] + b"\0")
     return f"{REPOSITORIO}:{prefijo}{huella.hexdigest()[:12]}"
@@ -585,11 +607,15 @@ def preparar_imagen(
     """
     receta = receta_de(imagen)
     cliente = cliente or obtener_cliente()
-    if not _imagen_existe(cliente, receta.imagen):
+    try:
+        base = cliente.images.get(receta.imagen)
+    except ImageNotFound as error:
         raise ImagenNoEncontrada(
             f"No existe la imagen base '{receta.imagen}'. "
             "Constrúyela con construir_imagen_base()."
-        )
+        ) from error
+    if imagen_desactualizada(cliente, receta.imagen, actual=base):
+        construir_imagen_base(cliente, imagen=receta.imagen, avanzar=avanzar)
 
     encontrada = _buscar_dependencias(Path(ruta_proyecto).resolve(), receta)
     if encontrada is None:
@@ -629,8 +655,20 @@ def preparar_imagen(
             if forma.explicar_fallo is None:
                 raise
             # #272: la causa probable y qué hacer, no la orden RUN de Docker.
+            from qagent.config.auditoria import PATRONES
+
+            limpio = re.sub(r"(?<=://)[^/\s@]+@", "***@", error.log or str(error))
+            for patron in PATRONES.values():
+                limpio = patron.sub("***", limpio)
+            lineas = [
+                linea.strip()
+                for linea in limpio.splitlines()
+                if "[ERROR]" in linea or "ERROR:" in linea or "[FATAL]" in linea
+            ]
+            detalle = "\n".join(lineas[:5])[:1200]
+            mensaje = forma.explicar_fallo(archivos, limpio)
             raise ErrorConstruccionImagen(
-                forma.explicar_fallo(archivos, error.log or str(error)), error.log
+                mensaje + ("\n" + detalle if detalle else ""), limpio
             ) from error
     finally:
         shutil.rmtree(contexto, ignore_errors=True)
@@ -777,6 +815,46 @@ def _construir(
     buildargs: dict[str, str] | None = None,
     labels: dict[str, str] | None = None,
 ) -> None:
+    """Construye con un reintento acotado del fallo transitorio de exportación Docker."""
+    inicio = time.monotonic()
+    for intento in range(2):
+        try:
+            _construir_una_vez(
+                cliente,
+                contexto,
+                etiqueta,
+                mensaje,
+                avanzar,
+                buildargs,
+                labels,
+                plazo_s=max(0.1, 900 - (time.monotonic() - inicio)),
+            )
+            return
+        except ErrorConstruccionImagen as error:
+            detalle = (str(error) + " " + (error.log or "")).lower()
+            if (
+                intento
+                or "lease does not exist" not in detalle
+                or time.monotonic() - inicio >= 900
+            ):
+                raise
+            registro.warning(
+                "Docker perdió la capa temporal; se reintenta una vez la construcción de %s.",
+                etiqueta,
+            )
+
+
+def _construir_una_vez(
+    cliente: docker.DockerClient,
+    contexto: Path,
+    etiqueta: str,
+    mensaje: str,
+    avanzar: Avance | None = None,
+    buildargs: dict[str, str] | None = None,
+    labels: dict[str, str] | None = None,
+    *,
+    plazo_s: float = 900,
+) -> None:
     """Construye una imagen y traduce los errores de Docker a `ErrorConstruccionImagen`.
 
     Con `avanzar`, lee el log en streaming (API de bajo nivel) para informar el avance.
@@ -798,6 +876,7 @@ def _construir(
             avanzar,
             buildargs=buildargs,
             labels=labels,
+            plazo_s=plazo_s,
         )
         return
     opciones = _opciones_build(buildargs, labels)
@@ -814,8 +893,9 @@ def _construir(
 
     hilo = threading.Thread(target=_ejecutar, daemon=True)
     hilo.start()
-    hilo.join(900)
+    hilo.join(plazo_s)
     if hilo.is_alive():
+        cliente.api.close()
         raise ErrorConstruccionImagen(
             f"{mensaje}: la construcción superó los 900 segundos.", ""
         )
@@ -838,21 +918,25 @@ def _construir_con_avance(
     avanzar: Avance,
     buildargs: dict[str, str] | None = None,
     labels: dict[str, str] | None = None,
+    plazo_s: float = 900,
 ) -> None:
     """`docker build` leyendo el log a medida que llega; cada paso útil va a `avanzar`."""
-    log: list[str] = []
+    log: deque[str] = deque(maxlen=1000)
     partes = None
     opciones = _opciones_build(buildargs, labels)
     inicio = time.monotonic()
-    TIEMPO_MAXIMO = 900
+    TIEMPO_MAXIMO = plazo_s
     try:
-        partes = cliente.api.build(
-            path=str(contexto),
-            tag=etiqueta,
-            rm=True,
-            forcerm=True,
-            decode=True,
-            **opciones,
+        partes = iterar_con_plazo(
+            lambda: cliente.api.build(
+                path=str(contexto),
+                tag=etiqueta,
+                rm=True,
+                forcerm=True,
+                decode=True,
+                **opciones,
+            ),
+            TIEMPO_MAXIMO,
         )
         for parte in partes:
             if time.monotonic() - inicio > TIEMPO_MAXIMO:
@@ -861,14 +945,14 @@ def _construir_con_avance(
                     "".join(log),
                 )
             if parte.get("error"):
-                log.append(str(parte["error"]))
+                log.append(str(parte["error"])[-8192:])
                 raise ErrorConstruccionImagen(
                     f"{mensaje}: {str(parte['error']).strip()}", "".join(log)
                 )
             texto = parte.get("stream")
             if not texto:
                 continue
-            log.append(texto)
+            log.append(texto[-8192:])
             for linea in texto.splitlines():
                 descripcion = describir_linea(linea)
                 if descripcion:
@@ -879,6 +963,11 @@ def _construir_con_avance(
         if cerrar is not None:
             cerrar()
         raise
+    except TimeoutError as exc:
+        cliente.api.close()
+        raise ErrorConstruccionImagen(
+            f"{mensaje}: se agotó el plazo de construcción.", "".join(log)
+        ) from exc
     except APIError as exc:
         raise ErrorConstruccionImagen(
             f"{mensaje}: {exc.explanation}", "".join(log)
@@ -894,6 +983,8 @@ def _opciones_build(
     cortada (cancelada, app cerrada, Docker caído) deja a medias.
     """
     opciones: dict[str, Any] = {"labels": {**ETIQUETA_CONSTRUCCION, **(labels or {})}}
+    if sesion := os.environ.get("QAGENT_TEST_SESSION"):
+        opciones["labels"]["qagent.test.session"] = sesion
     if buildargs:
         opciones["buildargs"] = buildargs
     return opciones

@@ -213,6 +213,10 @@ def _cerrar_run(
     if resumen.run_id is None or not almacen.existe():
         return
     try:
+        if resumen.imagen_docker:
+            run = almacen.leer_run(resumen.run_id)
+            run["imagen_docker"] = resumen.imagen_docker
+            almacen.guardar_run(run)
         almacen.finalizar_run(
             resumen.run_id,
             resumen.estado,
@@ -342,6 +346,7 @@ def _registrar(
             duracion_s=resumen.duracion_s,
             duracion_etapas=resumen.duracion_etapas,
             total_seleccionados=resumen.total_seleccionados,
+            total_descubiertos=resumen.total_descubiertos,
             total_elegibles=resumen.total_elegibles,
             total_procesados=resumen.total_procesados,
             total_pendientes=resumen.total_pendientes,

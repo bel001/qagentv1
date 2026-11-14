@@ -278,8 +278,7 @@ def _contexto_junit(raiz: Node) -> _ContextoJUnit:
         i.startswith("static")
         and not i.startswith("staticorg.junit.jupiter.api.Assertions.")
         and (
-            i.endswith(".*")
-            and not i.startswith("staticorg.mockito.Mockito.")
+            (i.endswith(".*") and not i.startswith("staticorg.mockito.Mockito."))
             or i.rsplit(".", 1)[-1] in _ASERCIONES
         )
         for i in imports
@@ -398,7 +397,7 @@ def _procesar_metodo(
     """Valida un método de la clase y extrae sus aserciones reconocibles."""
     anotaciones = _anotaciones_del_metodo(nodo)
     if not any(
-        a == "org.junit.jupiter.api.Test" or a == "Test" and contexto.reconoce_test
+        a == "org.junit.jupiter.api.Test" or (a == "Test" and contexto.reconoce_test)
         for a in anotaciones
     ):
         evasiones.append("Todos los métodos de la prueba deben ser @Test de JUnit 5.")
@@ -466,7 +465,7 @@ def _procesar_invocacion(
         evasiones.append("Las fábricas de colecciones deben proceder de java.util.")
     if nombre in {"assumeTrue", "assumeFalse", "abort", "exit", "halt"}:
         evasiones.append(f"La prueba puede omitir su comprobación: {nombre}.")
-    if nombre == "fail" or nombre.startswith("assert") and nombre not in _ASERCIONES:
+    if nombre == "fail" or (nombre.startswith("assert") and nombre not in _ASERCIONES):
         evasiones.append(f"Aserción adicional no trazable al contrato: {nombre}.")
     if nombre not in _ASERCIONES:
         return None
@@ -486,12 +485,16 @@ def _procesar_invocacion(
         )
     reconocido = (
         receptor == "org.junit.jupiter.api.Assertions"
-        or receptor == "Assertions"
-        and contexto.reconoce_assertions
-        and "Assertions" not in alias
-        or not receptor
-        and not contexto.ambiguos
-        and (nombre in contexto.estaticos or "*" in contexto.estaticos)
+        or (
+            receptor == "Assertions"
+            and contexto.reconoce_assertions
+            and "Assertions" not in alias
+        )
+        or (
+            not receptor
+            and not contexto.ambiguos
+            and (nombre in contexto.estaticos or "*" in contexto.estaticos)
+        )
     )
     if receptor and receptor.split(".", 1)[0] in alias:
         reconocido = False

@@ -47,14 +47,20 @@ def _mostrar_en_explorador(objetivo: Path, seleccionar_archivo: bool = True) -> 
         ruta_resuelta = objetivo.resolve()
         if sys.platform == "win32":
             if seleccionar_archivo and ruta_resuelta.is_file():
-                subprocess.Popen(
-                    ["explorer.exe", f"/select,{ruta_resuelta}"],
+                subprocess.Popen(  # noqa: S603 -- ruta como argumento, sin shell
+                    [
+                        str(
+                            Path(os.environ.get("WINDIR", r"C:\Windows"))
+                            / "explorer.exe"
+                        ),
+                        f"/select,{ruta_resuelta}",
+                    ],
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
             elif hasattr(os, "startfile"):
-                os.startfile(
+                os.startfile(  # noqa: S606 -- solo se abre la carpeta, no el archivo
                     str(
                         ruta_resuelta
                         if ruta_resuelta.is_dir()
@@ -67,7 +73,7 @@ def _mostrar_en_explorador(objetivo: Path, seleccionar_archivo: bool = True) -> 
                 if seleccionar_archivo
                 else ["open", str(ruta_resuelta)]
             )
-            subprocess.Popen(
+            subprocess.Popen(  # noqa: S603 -- ejecutable del sistema y ruta como argumento
                 cmd,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
 from qagent.lenguajes.base import ComandoSandbox
+from qagent.xml_seguro import parsear_xml
 
 IDENTIFICADOR = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*\Z")
 POM_TEMPORAL = "/work/proyecto/.qagent-pit.xml"
@@ -92,7 +92,7 @@ def comando_pit(modulo: str, funciones: list[str]) -> ComandoSandbox:
 def _version_pit() -> str:
     """Lee la versión fijada en la receta del sandbox Java, sin duplicar la fuente."""
     pom = Path(__file__).parent / "java" / "calentamiento" / "pom.xml"
-    raiz = ET.fromstring(pom.read_text(encoding="utf-8"))
+    raiz = parsear_xml(pom.read_text(encoding="utf-8"))
     version = raiz.findtext("{*}properties/{*}pitest.version")
     if version is None or not re.fullmatch(r"\d+(?:\.\d+)+", version):
         raise ValueError("La receta del sandbox no declara una versión PIT válida.")

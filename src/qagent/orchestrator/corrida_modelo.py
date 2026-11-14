@@ -73,11 +73,13 @@ class ResumenCorrida:
     duracion_etapas: dict[str, float] = field(default_factory=dict)
     cancelada: bool = False
     total_seleccionados: int = 0
+    total_descubiertos: int | None = None
     total_elegibles: int = 0
     total_procesados: int = 0
     total_pendientes: int = 0
     tipo_terminacion: str = "completada"
     objetivos_omitidos: int = 0
+    imagen_docker: str | None = None
 
     def a_dict(self) -> dict[str, Any]:
         """Versión serializable a JSON (evento `corrida_fin` de la interfaz)."""

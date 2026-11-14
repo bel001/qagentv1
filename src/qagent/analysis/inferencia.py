@@ -141,7 +141,11 @@ def indice_de_tests(raiz: str | Path) -> dict[str, list[tuple[str, str]]]:
     indice: dict[str, list[tuple[str, str]]] = {}
     for archivo in _archivos_de_prueba(base):
         try:
-            if archivo.stat().st_size > MAX_BYTES_ARCHIVO:
+            if (
+                archivo.is_symlink()
+                or not archivo.resolve().is_relative_to(base.resolve())
+                or archivo.stat().st_size > MAX_BYTES_ARCHIVO
+            ):
                 continue
             fuente = archivo.read_text(encoding="utf-8")
             arbol = arbol_ts.parsear(fuente)

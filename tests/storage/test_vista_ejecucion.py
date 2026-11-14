@@ -148,7 +148,7 @@ def test_los_indicadores_coinciden_con_results_json(results) -> None:
 def test_mutation_score_promedia_las_criticas_con_puntuacion(results) -> None:
     results["perfil"] = "deep"
     objetivos = results["objetivos"]
-    for objetivo, score in zip(objetivos, (80.0, 40.0)):
+    for objetivo, score in zip(objetivos[:2], (80.0, 40.0), strict=True):
         objetivo["critical"] = True
         objetivo["metricas"]["mutation_score"] = score
 

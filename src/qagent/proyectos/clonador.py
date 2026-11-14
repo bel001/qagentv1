@@ -12,10 +12,16 @@ import contextlib
 import os
 import re
 import shutil
+import signal
 import subprocess
+import threading
+import time
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from qagent.recursos import tamano_carpeta
 
 FORMATO_URL = "https://<sitio>/<usuario>/<repositorio>(.git)"
 
@@ -257,7 +263,7 @@ def _primer_ancestro_inexistente(ruta: Path) -> Path | None:
 
 def _leer_progreso(flujo, al_avanzar: AlAvanzar | None) -> str:
     """Lee stderr de git (líneas separadas por ``\\r`` o ``\\n``) y reporta el avance."""
-    lineas: list[str] = []
+    lineas = deque(maxlen=1000)
     actual = ""
     while True:
         caracter = flujo.read(1)
@@ -270,12 +276,36 @@ def _leer_progreso(flujo, al_avanzar: AlAvanzar | None) -> str:
                     al_avanzar(porcentaje_total(actual), actual.strip())
             actual = ""
         else:
-            actual += caracter
+            actual = (actual + caracter)[-8192:]
     if actual.strip():
         lineas.append(actual)
         if al_avanzar:
             al_avanzar(porcentaje_total(actual), actual.strip())
     return "\n".join(lineas)
+
+
+def _terminar_clonado(proceso: subprocess.Popen) -> None:
+    """Detiene Git y sus hijos; solo opera sobre el proceso creado para este clonado."""
+    if isinstance(proceso, subprocess.Popen):
+        if os.name == "nt":
+            taskkill = (
+                Path(os.environ.get("SystemRoot", r"C:\Windows"))
+                / "System32/taskkill.exe"
+            )
+            with contextlib.suppress(OSError, subprocess.TimeoutExpired):
+                subprocess.run(  # noqa: S603 -- ejecutable del sistema y PID propio, sin shell
+                    [str(taskkill), "/PID", str(proceso.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+        else:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proceso.pid, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError):
+        proceso.kill()
 
 
 def clonar(
@@ -285,6 +315,10 @@ def clonar(
     superficial: bool = True,
     al_avanzar: AlAvanzar | None = None,
     popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+    *,
+    cancelado: Callable[[], bool] | None = None,
+    timeout_s: float = 600,
+    max_bytes: int = 1_073_741_824,
 ) -> ResultadoClonado:
     """Ejecuta ``git clone`` y devuelve el resultado; nunca lanza excepciones de git.
 
@@ -340,6 +374,11 @@ def clonar(
             text=True,
             encoding="utf-8",
             errors="replace",
+            **(
+                {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+                if os.name == "nt"
+                else {"start_new_session": True}
+            ),
         )
     except FileNotFoundError:
         return ResultadoClonado(
@@ -349,14 +388,47 @@ def clonar(
             "Git no está instalado o no está en el PATH. Instálalo desde https://git-scm.com.",
         )
 
-    stderr = _leer_progreso(proceso.stderr, al_avanzar)
+    lectura: dict[str, str] = {}
+
+    def leer() -> None:
+        try:
+            lectura["stderr"] = _leer_progreso(proceso.stderr, al_avanzar)
+        except (OSError, ValueError):
+            lectura["stderr"] = "Se interrumpió la lectura de Git."
+
+    lector = threading.Thread(target=leer, name="qagent-git-progreso", daemon=True)
+    inicio = time.monotonic()
+    lector.start()
+    motivo = None
+    while lector.is_alive() or (
+        isinstance(proceso, subprocess.Popen) and proceso.poll() is None
+    ):
+        if lector.is_alive():
+            lector.join(0.05)
+        else:
+            time.sleep(0.05)
+        if cancelado and cancelado():
+            motivo = "cancelado"
+        elif time.monotonic() - inicio >= timeout_s:
+            motivo = "timeout"
+        elif tamano_carpeta(destino, max_bytes) > max_bytes:
+            motivo = "tamano_excedido"
+        if motivo:
+            _terminar_clonado(proceso)
+            lector.join(1)
+            break
+    stderr = lectura.get("stderr", "")
+    if motivo is None and tamano_carpeta(destino, max_bytes) > max_bytes:
+        motivo = "tamano_excedido"
     try:
         try:
-            codigo = proceso.wait(timeout=600)
+            codigo = proceso.wait(
+                timeout=max(0.1, timeout_s - (time.monotonic() - inicio))
+            )
         except TypeError:
             codigo = proceso.wait()
     except subprocess.TimeoutExpired:
-        proceso.kill()
+        _terminar_clonado(proceso)
         with contextlib.suppress(subprocess.TimeoutExpired):
             proceso.wait(timeout=10)
         if creada is not None and creada.exists():
@@ -367,6 +439,15 @@ def clonar(
             "timeout",
             "El clonado tardó más de 10 minutos y se canceló.",
         )
+    if motivo is not None:
+        if creada is not None and creada.exists():
+            shutil.rmtree(creada, ignore_errors=True)
+        mensajes = {
+            "cancelado": "El clonado se canceló.",
+            "timeout": "El clonado superó el tiempo máximo.",
+            "tamano_excedido": "El repositorio supera el tamaño máximo permitido (1 GB).",
+        }
+        return ResultadoClonado(False, str(destino), motivo, mensajes[motivo])
     if codigo == 0:
         return ResultadoClonado(True, str(destino))
 

@@ -28,4 +28,4 @@ jobs:
       - name: Pruebas
         env:
           QAGENT_FAKE_LLM: "1"
-        run: python test.py --sin-lint
+        run: python test.py

@@ -83,6 +83,10 @@ class CorridaMixin:
             if seleccion is not None:
                 return {"status": "seleccion_invalida", "mensaje": str(exc)}
             adaptador = None  # la corrida informa que la carpeta no existe
+        if adaptador is not None and (
+            motivo := adaptador.motivo_no_ejecutable(folder_path)
+        ):
+            return {"status": "blocked", "motivo": motivo, "problemas": [motivo]}
         if seleccion is not None and adaptador is not None:
             try:
                 filtrar_modulos(adaptador.analizar(folder_path)["modulos"], seleccion)
@@ -156,11 +160,27 @@ class CorridaMixin:
         imagen = None
         if modo == "real" and adaptador is not None:
             try:
-                imagen = adaptador.entorno_sandbox().imagen
+                imagen = adaptador.entorno_sandbox(folder_path).imagen
             except Exception:  # noqa: BLE001
                 imagen = None
+        tipos = sorted(
+            {
+                tipo
+                for entrada in (seleccion or [])
+                for campo, tipo in (
+                    ("funciones", "funcion"),
+                    ("endpoints", "endpoint"),
+                    ("componentes", "componente"),
+                    ("integraciones", "integracion"),
+                )
+                if entrada.get(campo)
+            }
+        )
         run_id = _desktop()._registrar_run(
-            folder_path, usa_docker=modo == "real", imagen_docker=imagen
+            folder_path,
+            usa_docker=modo == "real",
+            imagen_docker=imagen,
+            tipos_prueba=tipos or None,
         )
         # Emite un evento hacia la interfaz JS, con el nombre del perfil para personas (#133)
         self.emit_event(

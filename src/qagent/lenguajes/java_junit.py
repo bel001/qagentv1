@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import math
 import re
-import xml.etree.ElementTree as ET
 from typing import Any
 
 from qagent.sandbox.informe_pytest import (
@@ -19,6 +18,7 @@ from qagent.sandbox.informe_pytest import (
     parsear_junit,
     recortar_salida,
 )
+from qagent.xml_seguro import parsear_xml
 
 _MARCO_JAVA = re.compile(
     r"^\s*at\s+(?P<detalle>[^\s()]+)\((?P<archivo>[^\s():]+\.java):(?P<linea>[1-9]\d*)\)\s*$"
@@ -47,7 +47,7 @@ def interpretar_junit_java(xml: str) -> dict[str, Any]:
     if len(xml.encode("utf-8")) > LIMITE_XML:
         raise JUnitInvalido("El junit.xml es demasiado grande.")
     informe = parsear_junit(xml)  # Valida tamaño, sintaxis y ausencia de entidades.
-    raiz = ET.fromstring(xml)
+    raiz = parsear_xml(xml)
     if raiz.tag not in {"testsuite", "testsuites"}:
         raise JUnitInvalido("Se esperaba testsuite o testsuites de JUnit.")
     suites = [raiz] if raiz.tag == "testsuite" else list(raiz)

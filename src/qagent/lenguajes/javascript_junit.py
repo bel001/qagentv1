@@ -23,6 +23,7 @@ from qagent.sandbox.informe_pytest import (
     parsear_junit,
     recortar_salida,
 )
+from qagent.xml_seguro import parsear_xml
 
 _MARCO_NODE = re.compile(
     r"^\s*at\s+(?:(?P<detalle>[^()\n]+?)\s+\()?(?:file:///)?(?P<archivo>[^\s():]+):(?P<linea>\d+):(?P<col>\d+)\)?$"
@@ -118,7 +119,7 @@ def _interpretar_junit_vitest(xml_texto: str) -> dict[str, Any]:
     """Interpreta un XML JUnit de Vitest."""
     informe = parsear_junit(xml_texto)
     try:
-        raiz = ET.fromstring(xml_texto)
+        raiz = parsear_xml(xml_texto)
     except ET.ParseError as error:
         raise JUnitInvalido("XML JUnit mal formado.") from error
 

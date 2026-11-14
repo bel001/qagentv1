@@ -43,7 +43,7 @@ if sys.version_info >= (3, 11):
 else:  # Python 3.10
     import tomli as tomllib
 
-RUTA_CATALOGO = Path(__file__).resolve().with_name("proveedores.toml")
+RUTA_CATALOGO = Path(__file__).resolve().parents[1] / "config" / "config.toml"
 
 #: Tipos de modelo del catálogo. Solo "texto" genera las respuestas que usan los agentes.
 TIPO_TEXTO = "texto"

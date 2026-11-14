@@ -24,6 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Testing",
 ]
 dependencies = [
@@ -85,12 +87,20 @@ markers = [
 ]
 
 [tool.ruff]
+target-version = "py310"
 # bench/ y bench_api/ son bancos con bugs sembrados a propósito: no se reformatea ni se "arregla".
 # casos_tree_sitter/proyecto/ tiene formato raro a propósito: es lo que prueba TA-16.
 extend-exclude = ["bench", "bench_api", "tests/analysis/casos_tree_sitter/proyecto"]
 
 [tool.ruff.lint]
-extend-select = ["C901"]
+extend-select = ["C901", "B", "BLE", "PLE", "UP", "RUF", "S"]
+# El producto y sus ejemplos usan español, símbolos matemáticos e iconos Unicode.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S108", "S314", "S603", "S607", "RUF043"]
+"scripts/**" = ["S101", "S603", "S607"]
+"test.py" = ["S603"]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 30

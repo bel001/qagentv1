@@ -145,6 +145,19 @@ def borrar_imagenes(
     return borradas, errores
 
 
+def imagen_de_sesion(cliente: Any, etiqueta: str, sesion: str | None) -> bool:
+    """Solo una imagen etiquetada por esta sesión de pytest puede borrarse."""
+    if not sesion:
+        return False
+    try:
+        labels = (
+            cliente.images.get(etiqueta).attrs.get("Config", {}).get("Labels") or {}
+        )
+        return labels.get("qagent.test.session") == sesion
+    except Exception:  # noqa: BLE001 -- si no se puede acreditar propiedad, no borrar
+        return False
+
+
 def _es_derivada(etiqueta: str) -> bool:
     """True si la etiqueta es una imagen derivada por proyecto."""
     tag = etiqueta.removeprefix(f"{REPOSITORIO}:")

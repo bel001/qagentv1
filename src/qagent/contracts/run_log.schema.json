@@ -18,6 +18,11 @@
     "es_simulado"
   ],
   "properties": {
+    "total_descubiertos": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Objetivos encontrados por el adaptador antes de filtrar la selección, incluidas las integraciones candidatas. Opcional en corridas anteriores."
+    },
     "version": {
       "const": "1"
     },

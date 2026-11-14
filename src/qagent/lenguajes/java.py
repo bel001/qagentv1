@@ -13,6 +13,7 @@ sandbox (#182, #180).
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -176,6 +177,17 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 }
             )
             inyectadas = _tiene_dependencias_inyectadas(constructores)
+            # La inyección por campos y los constructores generados por Lombok
+            # tampoco tienen un contrato verificable de stubs en las unitarias.
+            pendientes_anotaciones = [nodo]
+            while pendientes_anotaciones:
+                actual = pendientes_anotaciones.pop()
+                if actual.type in {"annotation", "marker_annotation"} and re.match(
+                    r"@(?:[\w$]+\.)*(?:Autowired|Inject|Resource|RequiredArgsConstructor|AllArgsConstructor)\b",
+                    actual.text.decode("utf-8"),
+                ):
+                    inyectadas = True
+                pendientes_anotaciones.extend(actual.named_children)
             cuerpo = nodo.child_by_field_name("body")
             if cuerpo is None:
                 continue
@@ -205,6 +217,8 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 parametros = _parametros(metodo)
                 retorno = _texto(metodo.child_by_field_name("type"))
                 cuerpo_metodo = metodo.child_by_field_name("body")
+                if cuerpo_metodo is None:
+                    continue  # Una declaración abstracta no es un método ejecutable.
                 fin_firma = (
                     cuerpo_metodo.start_byte
                     if cuerpo_metodo is not None
@@ -233,7 +247,8 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                         "tipada": retorno is not None
                         and all(p["tipo"] for p in parametros),
                         "es_async": False,
-                        "dependencias_inyectadas": inyectadas,
+                        "dependencias_inyectadas": inyectadas
+                        and "static" not in tokens,
                     }
                 )
 
@@ -642,6 +657,9 @@ class JavaAdapter(AdaptadorEnDesarrollo):
                         for f in funciones
                         if f.get("dependencias_inyectadas")
                     ],
+                    "funciones_excluidas": [
+                        f for f in funciones if f.get("dependencias_inyectadas")
+                    ],
                 }
             )
             arboles[relativa] = arbol.root_node
@@ -656,7 +674,10 @@ class JavaAdapter(AdaptadorEnDesarrollo):
             # Un controlador se ofrece como endpoint, no como invocación directa
             # que eluda el binding, las validaciones y el contexto MVC.
             modulo["funciones"] = [
-                f for f in modulo["funciones"] if f["nombre"] not in manejadores
+                f
+                for f in modulo["funciones"]
+                if f["nombre"] not in manejadores
+                and not f.get("dependencias_inyectadas")
             ]
         funciones = [f for m in modulos for f in m["funciones"]]
         return {

@@ -94,6 +94,7 @@ from qagent.orchestrator.orquestador import (
 from qagent.orchestrator.regresion import huellas_de_objetivos
 from qagent.orchestrator.tiempos import iso_utc, segundos
 from qagent.sandbox import ejecutar_pruebas
+from qagent.sandbox.copias import con_sesion_de_copias
 from qagent.storage.registro import PERFILES_REGRESION
 
 #: Módulos donde viven los nombres que antes se importaban de `qagent.orchestrator.corrida`.
@@ -146,6 +147,7 @@ def __getattr__(nombre: str) -> Any:
     raise AttributeError(f"módulo {__name__!r} no tiene el atributo {nombre!r}")
 
 
+@con_sesion_de_copias
 def ejecutar_corrida(
     ruta_proyecto: str | Path,
     perfil: str,
@@ -416,6 +418,7 @@ def ejecutar_corrida(
         imagen = _esperar_imagen(
             entorno, cancelado, resumen, avisar_entorno, etapas_entorno, reloj
         )
+        resumen.imagen_docker = imagen
         a_ejecutar = modulos
         if imagen is None:
             # #148: sin entorno no se ejecuta nada, pero las specs ya planificadas se

@@ -207,3 +207,30 @@ El schema prueba forma y vocabulario, no capacidades dinámicas. El consumidor d
 - Agregar clientes, prompts, configuración o llamadas LLM (#200).
 - Medir un modelo real o elegir el modo predeterminado (#201).
 - Crear pantallas, iniciar corridas, generar pruebas o modificar Planner, Generator, Reviewer u orquestador.
+
+## Orientación por objetivo y consentimiento de consumo (2026-11-14)
+
+La Vista previa incluye orientación local por función, con categorías «recomendada»,
+«revisar» y «no soportada». La orientación no usa modelos, no cambia contratos ni
+valores esperados y no inicia corridas. Se calcula como un suplemento de Vista previa
+mediante el adaptador, conservando la estructura histórica del análisis del Planner.
+El contrato de tipos `recommendation.v1` y su proyección mínima a la IA se conservan.
+
+En Python se leen señales tree-sitter: retornos de objetos, constructores, estado
+compartido y llamadas potenciales a archivos, red, base de datos, reloj o azar.
+Las operaciones simples con datos son candidatas para empezar, sin garantizar que
+el Planner pueda deducir casos válidos. No se clasifica una fábrica solo porque su
+nombre empiece por `get_`. Los métodos públicos de clases que el ejecutor actual no
+expone se enumeran como límite de alcance; obtener su servicio no valida esos métodos.
+
+El usuario puede aplicar las funciones recomendadas en las carpetas incluidas,
+conservar su elección o seleccionar manualmente una función «para revisar».
+Al iniciar una generación con estas últimas, un aviso explica el posible consumo
+aunque después se omitan. Cancelar vuelve a Explorar sin llamar a `start_run`;
+aceptar permite continuar. La regresión sin IA no recibe ese aviso.
+
+Abrir y reanalizar proyectos usa reglas por defecto, incluso si el Recomendador
+está configurado en modo IA. La consulta opcional de tipos requiere solicitud
+explícita y un aviso previo de consumo; sigue siendo asíncrona. La interfaz impide
+duplicar una consulta pendiente y conserva resultados que lleguen rápidamente.
+No se incorpora un ejecutor de clases Python ni nuevos frameworks.

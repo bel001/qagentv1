@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from qagent.lenguajes.treesitter import obtener_parser
 from qagent.sandbox.informe_pytest import LIMITE_XML, JUnitInvalido
 from qagent.sandbox.modelos import ErrorPreparacionSandbox
+from qagent.xml_seguro import parsear_xml
 
 POM = ".qagent-junit.xml"
 TESTS = ".qagent-junit-tests"
@@ -73,6 +74,9 @@ ejecutar_maven test-compile || exit $?
 echo '{MARCA}ejecucion'
 ejecutar_maven org.jacoco:jacoco-maven-plugin:{version}:prepare-agent surefire:test
 estado_test=$?
+if [ "$estado_test" -ne 0 ] && ! find /out/junit-raw -name 'TEST-*.xml' -print -quit 2>/dev/null | grep -q .; then
+  exit "$estado_test"
+fi
 echo '{MARCA}cobertura'
 ejecutar_maven org.jacoco:jacoco-maven-plugin:{version}:report
 estado_cobertura=$?
@@ -109,7 +113,7 @@ def preparar_java(copia: Path, pruebas: Path) -> None:
             raise ValueError("Se requiere un pom.xml Maven válido.")
         if (
             original.find("{*}parent") is not None
-            or original.find("{*}modules") is not None
+            or original.find(".//{*}modules") is not None
         ):
             raise ValueError(
                 "La ejecución requiere resolver primero la herencia o los módulos Maven."
@@ -117,7 +121,9 @@ def preparar_java(copia: Path, pruebas: Path) -> None:
         # J5: Lombok anterior a 1.18.40 no compila con el JDK del sandbox.
         _ns_local = f"{{{_NS}}}" if original.tag.startswith("{") else ""
         version_lombok = _version_lombok(original, _ns_local)
-        if version_lombok is not None and _version_menor(version_lombok, "1.18.40"):
+        if version_lombok is not None and _lombok_incompatible(
+            original, _ns_local, version_lombok
+        ):
             raise ValueError(
                 f"Lombok {version_lombok} no es compatible con el JDK del sandbox; "
                 "actualiza a 1.18.40 o superior."
@@ -274,14 +280,16 @@ def motivo_proyecto_no_ejecutable(raiz: Path) -> str | None:
             "El proyecto hereda de un POM padre (<parent>); QAgent solo ejecuta "
             "Maven de un módulo sin herencia."
         )
-    if original.find("{*}modules") is not None:
+    if original.find(".//{*}modules") is not None:
         return (
             "El proyecto es multimódulo (<modules>); QAgent solo ejecuta Maven "
             "de un módulo."
         )
     ns = f"{{{_NS}}}" if original.tag.startswith("{") else ""
     version_lombok = _version_lombok(original, ns)
-    if version_lombok is not None and _version_menor(version_lombok, "1.18.40"):
+    if version_lombok is not None and _lombok_incompatible(
+        original, ns, version_lombok
+    ):
         return (
             f"Lombok {version_lombok} no es compatible con el JDK del sandbox; "
             "actualiza a 1.18.40 o superior."
@@ -312,6 +320,40 @@ def _version_jdk(pom: ET.Element, ns: str) -> str:
     if mayor <= 21:
         return "21"
     return "25"
+
+
+def recolectar_dependencias(raiz: Path) -> dict[str, bytes]:
+    """Prepara para la fase con red las mismas dependencias que usará JUnit offline."""
+    pom = _xml(_leer(raiz / "pom.xml", raiz))
+    ns = f"{{{_NS}}}" if pom.tag.startswith("{") else ""
+    receta = _xml(_RECETA.read_text(encoding="utf-8"))
+    version = receta.findtext("{*}properties/{*}junit.version")
+    _dependencia_junit(pom, ns, version)
+    _dependencia_mockito(pom, ns)
+    _dependencia_vintage(pom, ns, version)
+    # go-offline no siempre incluye annotationProcessorPaths: se resuelven como
+    # dependencias provided en la copia de descarga, sin ejecutar procesadores.
+    dependencias = _hijo(pom, ns + "dependencies")
+    for procesador in list(pom.findall(".//{*}annotationProcessorPaths/{*}path")):
+        identidad = (
+            procesador.findtext("{*}groupId"),
+            procesador.findtext("{*}artifactId"),
+        )
+        if not all(identidad) or any(
+            (d.findtext("{*}groupId"), d.findtext("{*}artifactId")) == identidad
+            for d in dependencias
+        ):
+            continue
+        dependencia = ET.SubElement(dependencias, ns + "dependency")
+        for campo in ("groupId", "artifactId", "version"):
+            if valor := procesador.findtext("{*}" + campo):
+                _hijo(dependencia, ns + campo).text = valor
+        _hijo(dependencia, ns + "scope").text = "provided"
+    if ns:
+        for nodo in pom.iter():
+            nodo.tag = nodo.tag.removeprefix(ns)
+        pom.set("xmlns", _NS)
+    return {"pom.xml": ET.tostring(pom, encoding="utf-8", xml_declaration=True)}
 
 
 def _propiedad_pom(pom: ET.Element, ns: str, nombre: str) -> str | None:
@@ -384,7 +426,12 @@ def _dependencia_mockito(pom: ET.Element, ns: str) -> None:
     for campo, valor in (
         ("groupId", "org.mockito"),
         ("artifactId", "mockito-core"),
-        ("version", "5.11.0"),
+        (
+            "version",
+            _xml(_RECETA.read_text(encoding="utf-8")).findtext(
+                "{*}properties/{*}mockito.version"
+            ),
+        ),
         ("scope", "test"),
     ):
         _hijo(dependencia, ns + campo).text = valor
@@ -416,25 +463,37 @@ def _dependencia_vintage(pom: ET.Element, ns: str, version: str) -> None:
 
 
 def _version_lombok(pom: ET.Element, ns: str) -> str | None:
-    """Devuelve la versión de Lombok declarada, o None si no se usa o no es literal."""
-    for dep in pom.iter(ns + "dependency"):
+    """Considera dependencias y procesadores: la version mas antigua debe ser compatible."""
+    from packaging.version import InvalidVersion, Version
+
+    versiones = []
+    for dep in pom.iter():
+        if dep.tag not in {ns + "dependency", ns + "path"}:
+            continue
         if (
-            dep.findtext("{*}groupId") == "org.projectlombok"
-            and dep.findtext("{*}artifactId") == "lombok"
+            dep.findtext("{*}groupId") != "org.projectlombok"
+            or dep.findtext("{*}artifactId") != "lombok"
         ):
-            version = dep.findtext("{*}version")
-            if version and not version.startswith("${"):
-                return version.strip()
-            # propiedad: intentar resolver
-            if version and version.startswith("${") and version.endswith("}"):
-                prop = version[2:-1]
-                props = pom.find(ns + "properties")
-                if props is not None:
-                    nodo = props.find(ns + prop)
-                    if nodo is not None and nodo.text:
-                        return nodo.text.strip()
-            return None
-    return None
+            continue
+        version = (dep.findtext("{*}version") or "").strip()
+        for _ in range(8):
+            if not (version.startswith("${") and version.endswith("}")):
+                break
+            version = (
+                pom.findtext(ns + "properties/" + ns + version[2:-1]) or ""
+            ).strip()
+        if version and not version.startswith("${"):
+            versiones.append(version)
+    try:
+        return min(versiones, key=Version) if versiones else None
+    except InvalidVersion:
+        return versiones[0] if versiones else None
+
+
+def _lombok_incompatible(pom: ET.Element, ns: str, version: str) -> bool:
+    """Comprueba Lombok contra el compilador elegido, también en procesadores."""
+    minima = {"17": "1.18.22", "21": "1.18.30", "25": "1.18.40"}[_version_jdk(pom, ns)]
+    return _version_menor(version, minima)
 
 
 def _version_menor(version: str, referencia: str) -> bool:
@@ -496,7 +555,7 @@ def recoger_junit(dir_salida: Path) -> str | None:
             if total > LIMITE_XML:
                 return None
             interpretar_junit_java(texto)
-            suite = ET.fromstring(texto)
+            suite = parsear_xml(texto)
             if suite.tag == "testsuite":
                 raiz.append(suite)
             else:
@@ -523,7 +582,7 @@ def _xml(texto: str) -> ET.Element:
     """Lee POM sin resolver DTD ni entidades externas."""
     if "<!DOCTYPE" in texto or "<!ENTITY" in texto:
         raise ValueError("No se admiten DTD ni entidades en el POM.")
-    return ET.fromstring(texto)
+    return parsear_xml(texto)
 
 
 def _hijo(padre: ET.Element, nombre: str) -> ET.Element:

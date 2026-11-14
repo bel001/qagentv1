@@ -61,6 +61,21 @@ def crear_cliente(
     """
     if simulado:
         return FakeLLMClient(modelo=precio.modelo)
+    proveedor = catalogo().get(precio.proveedor)
+    modelo = proveedor.modelo(precio.modelo) if proveedor else None
+    if (
+        precio.entrada_usd_m == 0
+        and precio.salida_usd_m == 0
+        and not (
+            modelo
+            and modelo.precio_confirmado
+            and modelo.entrada_usd_m == 0
+            and modelo.salida_usd_m == 0
+        )
+    ):
+        raise ConfiguracionLLMIncompleta(
+            "El modelo no tiene un precio confirmado; no se iniciará una llamada con costo desconocido."
+        )
 
     # Import diferido: qagent.config importa qagent.llm al cargarse.
     from qagent.config.carga import variable_de_agente, variable_en_uso

@@ -114,6 +114,11 @@ class ProyectosMixin:
 
         from qagent.proyectos import clonador
 
+        if self._clonando:
+            return {"iniciado": False, "mensaje": "Ya hay un clonado en curso."}
+        self._clonando = True
+        self._cancelar_clonado.clear()
+
         def avanzar(porcentaje: int | None, linea: str) -> None:
             self.emit_event(
                 "clonado_avance", {"porcentaje": porcentaje, "linea": linea}
@@ -121,7 +126,12 @@ class ProyectosMixin:
 
         def trabajo() -> None:
             resultado = clonador.clonar(
-                url, rama, destino, superficial, al_avanzar=avanzar
+                url,
+                rama,
+                destino,
+                superficial,
+                al_avanzar=avanzar,
+                cancelado=self._cancelar_clonado.is_set,
             )
             # Si el repositorio ya estaba clonado, no se descarga otra vez: se abre
             # el que hay (y no se toca nada de lo que hay dentro).
@@ -191,8 +201,25 @@ class ProyectosMixin:
                 _preparar_almacen(resultado.destino)
             self.emit_event("clonado_fin", datos)
 
-        threading.Thread(target=trabajo, name="clonado-git", daemon=True).start()
+        def ejecutar() -> None:
+            try:
+                trabajo()
+            except Exception as error:  # noqa: BLE001 -- el puente debe liberar el estado del hilo
+                self.emit_event("clonado_fin", {"ok": False, "error": str(error)})
+            finally:
+                self._clonando = False
+
+        try:
+            threading.Thread(target=ejecutar, name="clonado-git", daemon=True).start()
+        except Exception:
+            self._clonando = False
+            raise
         return {"iniciado": True}
+
+    def cancelar_clonado(self) -> dict:
+        """Solicita detener Git, conservando cualquier carpeta preexistente."""
+        self._cancelar_clonado.set()
+        return {"ok": True}
 
     def inspeccionar_carpeta(self, ruta: str) -> dict:
         """Valida la carpeta y cuenta las fuentes del adaptador elegido (HU-01).
@@ -334,17 +361,21 @@ class ProyectosMixin:
         except OSError:
             return False
 
-    def obtener_vista_previa(self, ruta: str) -> dict:
+    def obtener_vista_previa(self, ruta: str, usar_ia: bool = False) -> dict:
         """Obtiene la vista previa del proyecto analizado por AST (HU-04).
 
         Devuelve los módulos priorizados (primero los que tienen más funciones
         con ramas), los errores de sintaxis y el resumen de métricas e
         inconsistencias según el JSON de EN-02.
+        Por defecto no consulta modelos. ``usar_ia=True`` solicita explícitamente
+        la recomendación opcional de tipos con IA, entregada mediante un evento.
         """
         import threading
 
         from qagent.proyectos import vista_previa
 
+        if usar_ia is not True:
+            return vista_previa.generar_vista_previa(ruta, ia=False)
         recomendador = vista_previa.recomendador_ia_configurado()
         if recomendador is None:
             return vista_previa.generar_vista_previa(ruta, ia=False)

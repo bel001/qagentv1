@@ -1,18 +1,20 @@
 """Verifica que los modelos y precios de config.toml coinciden con el catálogo (M4)."""
 
+import sys
 from pathlib import Path
 
-import tomllib
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
 
 RAIZ = Path(__file__).resolve().parents[2]
 CONFIG = RAIZ / "src" / "qagent" / "config" / "config.toml"
-PROVEEDORES = RAIZ / "src" / "qagent" / "llm" / "proveedores.toml"
 
 
 def test_precios_config_coinciden_con_catalogo():
     cfg = tomllib.loads(CONFIG.read_text(encoding="utf-8"))
-    prov = tomllib.loads(PROVEEDORES.read_text(encoding="utf-8"))
-    proveedores = prov["proveedores"]
+    proveedores = cfg["proveedores"]
 
     for agente, datos in cfg["agentes"].items():
         if not isinstance(datos, dict) or "modelo" not in datos:

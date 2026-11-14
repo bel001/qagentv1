@@ -132,7 +132,12 @@ def _md_cabecera(
         lineas.append(f"- **La corrida se detuvo:** {datos['motivo_fallo']}")
     lineas.append(
         "- **Objetivos:** "
-        f"{datos.get('total_seleccionados', total)} seleccionados · "
+        + (
+            f"{datos['total_descubiertos']} descubiertos · "
+            if datos.get("total_descubiertos") is not None
+            else ""
+        )
+        + f"{datos.get('total_seleccionados', total)} seleccionados · "
         f"{datos.get('total_elegibles', total)} elegibles · "
         f"{datos.get('total_procesados', total)} procesados · "
         f"{datos.get('total_omitidos', 0)} omitidos · "

@@ -52,6 +52,7 @@
     },
     "decision": { "enum": ["accept", "retry", "bug_detectado", "stalled"] },
     "feedback": { "type": "string" },
+    "detener_corrida": { "type": "boolean", "description": "El adaptador detectó un error común al proyecto; no procesar más objetivos." },
     "motivo_sin_veredicto": {
       "type": "string", "minLength": 1,
       "description": "Fallo técnico que impide juzgar el objetivo y no se corrige regenerando la prueba."

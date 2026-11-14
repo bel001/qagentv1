@@ -48,6 +48,20 @@ def escribir(raiz: Path, ruta: str, texto: str) -> None:
     destino.write_text(texto, encoding="utf-8")
 
 
+@pytest.mark.parametrize(
+    "carpeta", ["integracion", "dependencias", "multilenguaje", "sin_docstring"]
+)
+def test_no_excluye_codigo_por_nombres_de_bancos_internos(
+    tmp_path: Path, carpeta: str
+) -> None:
+    escribir(tmp_path, f"{carpeta}/calc.py", "def doble(x):\n    return x * 2\n")
+
+    resultado = analizar_proyecto(tmp_path)
+
+    assert [m["ruta"] for m in resultado["modulos"]] == [f"{carpeta}/calc.py"]
+    assert resultado["modulos"][0]["funciones"][0]["nombre"] == "doble"
+
+
 # --------------------------------------------------------------------------- #
 # Evidencia de aceptación (criterio 6 de EN-02)
 # --------------------------------------------------------------------------- #

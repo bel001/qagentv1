@@ -267,6 +267,11 @@ def test_regresion_ejecuta_una_prueba_java_historica_sin_ia(
     historial_corto, monkeypatch
 ):
     """Repite una spec y archivo del formato anterior; el ejecutor es simulado."""
+    (historial_corto / "pom.xml").write_text(
+        "<project><modelVersion>4.0.0</modelVersion><groupId>org.qagent</groupId>"
+        "<artifactId>historial</artifactId><version>1</version></project>",
+        encoding="utf-8",
+    )
     almacen = AlmacenProyecto(historial_corto)
     origen = almacen.crear_run()
     fuente = historial_corto / MODULO
@@ -318,5 +323,6 @@ def test_regresion_ejecuta_una_prueba_java_historica_sin_ia(
     assert resultado.estado == "fin", resultado.motivo
     assert resultado.aceptadas == resultado.total_procesados == 1
     assert resultado.tokens == 0
+    assert almacen.leer_run(run["run_id"])["tipos_prueba"] == ["funcion"]
     assert len(llamadas) == 1
     assert ruta.read_bytes() == bytes_anteriores

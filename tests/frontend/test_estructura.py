@@ -132,7 +132,7 @@ def test_todo_token_usado_esta_definido_en_tokens_css() -> None:
     tokens = (FRONTEND / "css" / "tokens.css").read_text(encoding="utf-8")
     definidos = set(re.findall(r"(--[a-z0-9-]+)\s*:", tokens))
     usados: dict[str, str] = {}
-    for archivo in _archivos_de_interfaz() + [FRONTEND / "css" / "tokens.css"]:
+    for archivo in [*_archivos_de_interfaz(), FRONTEND / "css" / "tokens.css"]:
         texto = _BASE64.sub("", archivo.read_text(encoding="utf-8"))
         for token in re.findall(r"var\((--[a-z0-9-]+)\s*\)", texto):
             usados.setdefault(token, archivo.relative_to(FRONTEND).as_posix())

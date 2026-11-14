@@ -176,14 +176,15 @@ def test_el_tooltip_funciona_en_cualquier_pantalla_y_con_teclado() -> None:
 
 # No cambia la selección ni el indicador existente
 def test_sin_docstring_no_desactiva_incluir_ni_la_seleccion() -> None:
-    assert "inc: true" in VISTA_JS
+    assert "inc: !f.no_soportada" in VISTA_JS
     for funcion in ("toggle", "obtenerSeleccionObjetivos", "seleccionarTodosObjetivos"):
         assert "doc" not in _cuerpo(VISTA_JS, funcion)
     # La casilla Incluir de la fila no depende del docstring.
     fila = _cuerpo(VISTA_JS, "renderFns")
     incluir = fila[fila.index('aria-label="Incluir función') :]
     incluir = incluir[: incluir.index("</td>")]
-    assert "doc" not in incluir and "disabled" not in incluir
+    assert "doc" not in incluir
+    assert "f.noSoportada ? `disabled" in incluir
 
 
 def test_se_conserva_la_columna_complejidad() -> None:

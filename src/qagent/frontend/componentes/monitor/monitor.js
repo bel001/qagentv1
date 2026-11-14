@@ -273,6 +273,7 @@ function pushEvent(){
 async function startMonitor(){
   if (!entornoListo) { toast(escHtml(entornoMotivo)); return; }
   if (window.pywebview && window.pywebview.api) {
+    if (!confirmarOrientacionAntesDeIA()) { go('preview'); return; }
     // Python verifica Docker (HU-13) y el entorno completo (EN-06) antes de iniciar.
     // issue 275: inferir el contrato de las funciones sin docstring y, si se pidió, revisarlo antes de generar.
     const r = await window.pywebview.api.start_run(projectPath, profile, obtenerSeleccionObjetivos(), INFERIR_SIN_DOCSTRING, INFERIR_SIN_DOCSTRING && REVISAR_INFERIDOS);
@@ -302,6 +303,18 @@ async function startMonitor(){
   go('monitor');
   pintarProgreso(); iniciarRelojProgreso();
   pushEvent(); clearInterval(monTimer); monTimer = setInterval(pushEvent, 900);
+}
+
+function confirmarOrientacionAntesDeIA(){
+  if (typeof profile !== 'undefined' && ['reg','reg_deep'].includes(profile)) return true;
+  if (typeof eleccionPruebas !== 'undefined' && eleccionPruebas.unitarias !== true && eleccionPruebas.integracion !== true) return true;
+  const revisar = (typeof MODULES === 'undefined' ? [] : MODULES)
+    .filter(m=>m.sel && !m.error)
+    .flatMap(m=>m.fns || [])
+    .filter(f=>f.inc && !f.noSoportada && f.orientacion && f.orientacion.categoria === 'revisar');
+  if (!revisar.length) return true;
+  const nombres=revisar.slice(0,8).map(f=>`${f.n}: ${f.orientacion.motivo}`).join('\n');
+  return window.confirm(`Elegiste ${revisar.length} función(es) que requieren revisión. El Planner puede consumir tokens aunque después las omita.\n\n${nombres}${revisar.length > 8 ? '\n…' : ''}\n\n¿Continuar con esta selección? Pulsa Cancelar para revisarla sin iniciar llamadas a la IA.`);
 }
 function finishRun(){
   if(runDone) return; runDone = true; clearInterval(monTimer); clearInterval(agoTimer);

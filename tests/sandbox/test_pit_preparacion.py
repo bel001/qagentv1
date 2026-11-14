@@ -190,7 +190,7 @@ def test_conserva_pruebas_aprobadas_con_misma_clase(
     preparados = sorted((copia / ".qagent-pit-tests/ejemplo").glob("*.java"))
     assert len(preparados) == 2
     assert preparados[0].stem != preparados[1].stem
-    for anterior, archivo in zip((original, segunda), preparados):
+    for anterior, archivo in zip((original, segunda), preparados, strict=True):
         contenido = archivo.read_text(encoding="utf-8")
         assert f"class {archivo.stem} " in contenido
         assert not JavaAdapter().comparar_aserciones(anterior, contenido).es_laundering

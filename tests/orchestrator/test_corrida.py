@@ -43,9 +43,8 @@ def ejecutor_simulado(
 @pytest.fixture
 def proyecto(tmp_path: Path) -> AlmacenProyecto:
     carpeta = tmp_path / "banco"
-    shutil.copytree(
-        BANCO, carpeta, ignore=shutil.ignore_patterns("*.md", "*.json", ".qagent")
-    )
+    carpeta.mkdir()
+    shutil.copyfile(BANCO / "banco_mvp.py", carpeta / "banco_mvp.py")
     almacen = AlmacenProyecto(carpeta)
     almacen.inicializar()
     return almacen

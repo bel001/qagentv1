@@ -15,10 +15,11 @@ from typing import Any
 
 import docker
 from docker.errors import APIError, ImageNotFound
-from docker.types import Mount
+from docker.types import LogConfig, Mount, Ulimit
 from requests.exceptions import RequestException
 
 from qagent.sandbox.cliente import obtener_cliente
+from qagent.sandbox.copias import sesion_actual
 from qagent.sandbox.modelos import (
     ETIQUETA_CONTENEDOR,
     LIMITES_POR_DEFECTO,
@@ -27,6 +28,11 @@ from qagent.sandbox.modelos import (
     ImagenNoEncontrada,
     LimitesSandbox,
     ResultadoSandbox,
+)
+from qagent.sandbox.vigilancia import (
+    MAX_BYTES_ESCRITURA,
+    RESERVA_DISCO_BYTES,
+    VigilanciaDisco,
 )
 
 EXCLUIDOS_DE_LA_COPIA = (
@@ -86,11 +92,27 @@ def copiar_proyecto(ruta_proyecto: str | Path, destino: str | Path) -> Path:
     if not origen.is_dir():
         raise ErrorSandbox(f"La carpeta del proyecto no existe: {origen}")
     destino = Path(destino)
+    copiados = 0
+
+    def copiar_archivo(fuente, objetivo):
+        nonlocal copiados
+        tamano = Path(fuente).stat().st_size
+        copiados += tamano
+        if (
+            copiados > MAX_BYTES_ESCRITURA
+            or shutil.disk_usage(destino.parent).free < tamano + RESERVA_DISCO_BYTES
+        ):
+            raise ErrorSandbox(
+                "El proyecto supera el presupuesto de disco seguro para la copia del sandbox."
+            )
+        return shutil.copy2(fuente, objetivo)
+
     shutil.copytree(
         origen,
         destino,
         symlinks=True,
         ignore=shutil.ignore_patterns(*EXCLUIDOS_DE_LA_COPIA),
+        copy_function=copiar_archivo,
     )
     return destino.resolve()
 
@@ -140,8 +162,14 @@ def ejecutar_en_sandbox(
 
     temporal = Path(tempfile.mkdtemp(prefix="qagent-sandbox-")).resolve()
     contenedor = None
+    prestamo = None
     try:
-        copia = copiar_proyecto(ruta_proyecto, temporal / "proyecto")
+        sesion = sesion_actual(Path(ruta_proyecto))
+        if sesion is None:
+            copia = copiar_proyecto(ruta_proyecto, temporal / "proyecto")
+        else:
+            prestamo = sesion.prestar()
+            copia = prestamo.__enter__()
         salida = temporal / "out"
         salida.mkdir()
         salida.chmod(0o777)  # el usuario del contenedor (uid 1000) debe poder escribir
@@ -154,13 +182,14 @@ def ejecutar_en_sandbox(
                     2, "", str(error), comando=list(comando), limites=limites
                 )
 
-        variables = {"PYTHONPATH": DIR_PROYECTO, "HOME": "/tmp", **(entorno or {})}
+        variables = {"PYTHONPATH": DIR_PROYECTO, "HOME": "/tmp", **(entorno or {})}  # noqa: S108 -- tmpfs privado
         limites = ajustar_cpus_a_docker(limites, cliente)
         inicio = time.monotonic()
         contenedor = _crear_contenedor(
             cliente, imagen, comando, copia, tests, salida, limites, variables
         )
-        exit_code, timed_out = _esperar(contenedor, limites.timeout_s)
+        with VigilanciaDisco(contenedor, [copia, salida]) as vigilancia:
+            exit_code, timed_out = _esperar(contenedor, limites.timeout_s)
         duracion = time.monotonic() - inicio
 
         contenedor.reload()
@@ -177,12 +206,31 @@ def ejecutar_en_sandbox(
             oom_killed=oom or (exit_code == CODIGO_SIGKILL and not timed_out),
             duracion_s=round(duracion, 3),
         )
+        if vigilancia.motivo:
+            resultado.exit_code = 2
+            resultado.oom_killed = False
+            resultado.stderr += "\n" + vigilancia.motivo
+            resultado.limite_disco = True
+        if resultado.exit_code != 0 and (
+            resultado.exit_code == 153
+            or any(
+                texto in resultado.stdout + resultado.stderr
+                for texto in (
+                    "File size limit exceeded",
+                    "File too large",
+                    "No space left on device",
+                )
+            )
+        ):
+            resultado.limite_disco = True
         if al_terminar is not None:
             al_terminar(copia, salida)
         return resultado
     finally:
         if contenedor is not None:
             _eliminar(contenedor)
+        if prestamo is not None:
+            prestamo.__exit__(None, None, None)
         shutil.rmtree(temporal, ignore_errors=True)
 
 
@@ -376,7 +424,11 @@ def _crear_contenedor(
             cap_drop=["ALL"],
             security_opt=["no-new-privileges"],
             read_only=True,
-            tmpfs={"/tmp": f"rw,size={TMP_TAMANO}"},
+            log_config=LogConfig(
+                type="json-file", config={"max-size": "2m", "max-file": "1"}
+            ),
+            ulimits=[Ulimit(name="fsize", soft=268435456, hard=268435456)],
+            tmpfs={"/tmp": f"rw,size={TMP_TAMANO}"},  # noqa: S108 -- memoria temporal privada
             labels=ETIQUETA_CONTENEDOR,
         )
     except ImageNotFound as exc:
@@ -409,29 +461,45 @@ def _esperar(contenedor: Any, timeout_s: int) -> tuple[int, bool]:
 
 def _leer_logs(contenedor: Any, stdout: bool) -> str:
     """Lee stdout o stderr del contenedor como texto, acotado a LIMITE_LOGS_BYTES."""
-    datos = contenedor.logs(stdout=stdout, stderr=not stdout)
-    if len(datos) > LIMITE_LOGS_BYTES:
-        datos = datos[-LIMITE_LOGS_BYTES:]
-        return "[... salida truncada ...]\n" + datos.decode("utf-8", errors="replace")
+    partes = contenedor.logs(stdout=stdout, stderr=not stdout, stream=True)
+    datos = bytearray()
+    try:
+        for bloque in partes:
+            restante = LIMITE_LOGS_BYTES - len(datos)
+            datos.extend(bloque[:restante])
+            if len(bloque) > restante:
+                return (
+                    datos.decode("utf-8", errors="replace")
+                    + "\n[... salida truncada ...]"
+                )
+    finally:
+        cerrar = getattr(partes, "close", None)
+        if cerrar:
+            cerrar()
     return datos.decode("utf-8", errors="replace")
 
 
 def leer_coverage(archivo: Path) -> dict[str, Any] | None:
     """Carga coverage.json si existe y es válido (None si falta o está dañado)."""
-    if not archivo.is_file():
+    if archivo.is_symlink() or not archivo.is_file():
         return None
     try:
         if archivo.stat().st_size > LIMITE_COVERAGE_BYTES:
             return None
-        return json.loads(archivo.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        datos = json.loads(archivo.read_text(encoding="utf-8"))
+        return datos if isinstance(datos, dict) else None
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return None
 
 
 def _leer_texto(archivo: Path, limite_bytes: int) -> str | None:
     """Texto de un archivo de salida, o None si no existe, es muy grande o no se lee."""
     try:
-        if not archivo.is_file() or archivo.stat().st_size > limite_bytes:
+        if (
+            archivo.is_symlink()
+            or not archivo.is_file()
+            or archivo.stat().st_size > limite_bytes
+        ):
             return None
         return archivo.read_text(encoding="utf-8", errors="replace")
     except OSError:

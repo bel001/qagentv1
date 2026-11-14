@@ -69,6 +69,8 @@ async function main() {
   server.stdout.on('data', chunk => startup.push(clean(chunk)));
   server.stderr.on('data', chunk => startup.push(clean(chunk)));
   // El navegador arranca mientras la aplicación levanta: los dos tiempos van en paralelo.
+  const arranqueNavegador = Date.now();
+  let browserMs = 0;
   const launching = chromium.launch({
     headless: true,
     args: [
@@ -88,11 +90,13 @@ async function main() {
       '--no-default-browser-check',
       '--mute-audio',
     ],
+  }).then(browser => {
+    browserMs = Date.now() - arranqueNavegador;
+    return browser;
   });
   const ready = await waitForPort(plan.port, plan.startup_timeout_ms);
   const startupMs = Date.now() - arranqueApp;
   const browser = await launching;
-  const browserMs = Date.now() - arranqueApp - startupMs;
   if (!ready) {
     await browser.close().catch(() => {});
     return {
@@ -105,6 +109,7 @@ async function main() {
     };
   }
 
+  const inicioRutas = Date.now();
   const context = await browser.newContext({ serviceWorkers: 'block' });
   await context.route('**/*', async route => {
     let url;
@@ -178,7 +183,7 @@ async function main() {
   return { version: '1', status, startup: { ready: true, exit_code: null, port: plan.port,
     timeout_ms: plan.startup_timeout_ms, log: startup.join('').slice(-12000), reason: null },
     routes: results,
-    timing: { startup_ms: startupMs, browser_ms: browserMs, routes_ms: totalMs - startupMs - browserMs, total_ms: totalMs },
+    timing: { startup_ms: startupMs, browser_ms: browserMs, routes_ms: Date.now() - inicioRutas, total_ms: totalMs },
     duration_s: totalMs / 1000 };
 }
 

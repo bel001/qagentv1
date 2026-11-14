@@ -42,12 +42,22 @@ registrarComponente('vista-previa/vista-previa', `<!-- ===== 2. EXPLORAR ===== -
         </div>
         <div class="exp-reco-acciones">
           <button type="button" class="ini-btn" id="expRecoConfigurar" onclick="go('config')" title="Elige el proveedor, el modelo y la API key de la recomendación con IA">Configurar IA</button>
+          <button type="button" class="ini-btn" id="expRecoSolicitarIA" onclick="solicitarRecomendacionIA()">Consultar tipos con IA · consume tokens</button>
           <button type="button" class="ini-btn" id="expRecoAplicar" onclick="aplicarRecomendacion()">Aplicar recomendación</button>
         </div>
       </div>
       <ol class="exp-reco-lista" id="expRecoLista"></ol>
       <div class="exp-reco-prox" id="expRecoProx"></div>
       <p class="exp-reco-estado" id="expRecoEstado" role="status" aria-live="polite"></p>
+    </section>
+
+    <section class="np-tarjeta exp-reco hide" id="expOrientacion" aria-labelledby="expOrientacionTitulo">
+      <div class="exp-reco-cab"><div><h2 id="expOrientacionTitulo">Qué conviene probar primero</h2>
+        <p class="exp-nota">Análisis estático · 0 tokens. Orienta tu selección; no garantiza que se puedan generar casos válidos.</p></div>
+        <button type="button" class="ini-btn" id="expAplicarObjetivos" onclick="aplicarSeleccionRecomendada()">Seleccionar recomendadas en carpetas incluidas</button></div>
+      <p id="expOrientacionResumen" role="status" aria-live="polite"></p>
+      <p class="exp-nota">Las funciones con «Revisar antes de usar IA» siguen disponibles: puedes incluirlas o excluirlas. No se inicia una corrida al aplicar esta selección.</p>
+      <div id="expMetodosNoDisponibles" class="exp-reco-prox"></div>
     </section>
 
     <div class="exp-rejilla">
@@ -145,6 +155,7 @@ function aplicarResumenDemo() {
   reiniciarVistaExplorar();
   RECOMENDACION = null;   // la recomendación sale del backend; la demostración no la inventa
   renderRecomendacion();
+  renderOrientacionPruebas(null);
   const modValidos = MODULES.filter(m => !m.error);
   const fns = modValidos.flatMap(m => m.fns);
   const total = fns.length;
@@ -196,6 +207,7 @@ function mostrarLenguajeProyecto(res = {}) {
   PROYECTO_E2E_DISPONIBLE = typeof res.e2e_humo_disponible === 'boolean' ? res.e2e_humo_disponible : null;
   PROYECTO_MOTIVO_NO_EJECUTABLE = res.motivo_no_ejecutable || null;
   INFERIR_SIN_DOCSTRING = res.inferencia_activa !== false;   // issue 275: valor inicial de la casilla de Preparar
+  LIMITE_INFERENCIA_POR_MODULO = Number.isInteger(res.limite_inferencia_por_modulo) ? res.limite_inferencia_por_modulo : 20;
   const framework = res.framework_pruebas || 'pytest';
   const etiqueta = `${PROYECTO_NOMBRE_LENGUAJE} · ${{junit5:'JUnit 5'}[framework] || framework}`;
   $('projLenguaje').textContent = etiqueta;
@@ -220,9 +232,11 @@ function cargarDatosVistaPrevia(res) {
       typed: f.tipada ? 1 : 0,
       doc: f.docstring ? 1 : 0,
       inferible: !!f.inferible,   // issue 275: sin docstring y en Python, el contrato se puede inferir
+      noSoportada: f.no_soportada || null,
+      orientacion: f.orientacion_prueba || null,
       br: f.ramas || 0,
       crit: f.critica_propuesta ?? ((f.ramas || 0) > 0),
-      inc: true,
+      inc: !f.no_soportada,
       linea: f.linea
     }));
     const endpoints = (m.endpoints || []).map(e => {
@@ -268,6 +282,7 @@ function cargarDatosVistaPrevia(res) {
   }));
 
   MODULES = [...modulosAST, ...modulosErr];
+  renderOrientacionPruebas(res.orientacion_pruebas);
   actualizarResumenUI(res.resumen, res.errores);
 }
 
@@ -309,7 +324,7 @@ function aplicarSeleccionObjetivos(seleccion){
     if(!guardado) return;
     m.sel = !!guardado.incluido;
     const funciones = new Map((guardado.funciones || []).map(f => [f.nombre, f]));
-    (m.fns || []).forEach(f => { const previo=funciones.get(f.n); if(previo){ f.inc=!!previo.incluido; f.crit=!!previo.critico; } });
+    (m.fns || []).forEach(f => { const previo=funciones.get(f.n); if(previo && !f.noSoportada){ f.inc=!!previo.incluido; f.crit=!!previo.critico; } });
     const endpoints = new Map((guardado.endpoints || []).map(e => [e.objetivo, e]));
     (m.endpoints || []).forEach(e => { const previo=endpoints.get(e.objetivo); if(previo){ e.inc=!!previo.incluido; e.crit=!!previo.critico; } });
   });
@@ -483,6 +498,7 @@ async function cargarProyecto(name, src, where, br='main', ruta='', opciones = {
 // Sin análisis (fallo en la app real): lista vacía y contadores en cero, sin datos de ejemplo.
 function vaciarVistaPrevia() {
   MODULES = [];
+  renderOrientacionPruebas(null);
   PROYECTO_MOTIVO_NO_EJECUTABLE = null;
   mostrarLenguajeProyecto();
   reiniciarVistaExplorar();
@@ -505,6 +521,7 @@ function renderRecomendacion(){
   if(!caja) return;
   caja.classList.toggle('hide', !RECOMENDACION);
   $('expRecoEstado').textContent = '';
+  if ($('expRecoSolicitarIA')) $('expRecoSolicitarIA').disabled = RECO_IA_PENDIENTE;
   if(!RECOMENDACION){ $('expRecoLista').innerHTML = ''; $('expRecoProx').innerHTML = ''; return; }
   // issue 200: con origen "ia" un modelo ordenó y explicó los tipos; con "reglas", el análisis sin IA.
   const porIA = RECOMENDACION.recomendacion && RECOMENDACION.recomendacion.origen === 'ia';
@@ -521,6 +538,50 @@ function renderRecomendacion(){
   }).join('');
   $('expRecoAplicar').disabled = recs.length === 0;
   if(RECO_IA_PENDIENTE && !porIA) $('expRecoEstado').textContent = 'La IA está ordenando y explicando la recomendación. Mientras tanto ves la de las reglas.';
+}
+
+// Solicitud explícita: abrir o reanalizar un proyecto nunca consulta al Recomendador IA.
+async function solicitarRecomendacionIA(){
+  if (RECO_IA_PENDIENTE) return;
+  if (!(window.pywebview && window.pywebview.api)) { toast('Disponible en la aplicación de escritorio.'); return; }
+  if (!window.confirm('Esta consulta opcional al Recomendador puede consumir tokens de tu API. La orientación por función ya está disponible gratis. ¿Quieres consultar la IA para ordenar los tipos de prueba?')) return;
+  const ruta = projectPath;
+  RECO_IA_PENDIENTE = true;
+  renderRecomendacion();
+  try {
+    const r = await window.pywebview.api.obtener_vista_previa(ruta, true);
+    if (rutaComparable(ruta) !== rutaComparable(projectPath)) return;
+    const recibida = !RECO_IA_PENDIENTE && !!r.recomendacion_ia_pendiente;
+    if (!recibida && r.recomendacion) RECOMENDACION = {recomendacion:r.recomendacion, proximamente:r.proximamente || []};
+    RECO_IA_PENDIENTE = RECO_IA_PENDIENTE && !!r.recomendacion_ia_pendiente;
+    renderRecomendacion();
+    if (!r.recomendacion_ia_pendiente) $('expRecoEstado').textContent = 'Se conservó la recomendación por reglas. Revisa la configuración del Recomendador si quieres usar IA.';
+  } catch(err) {
+    if (rutaComparable(ruta) !== rutaComparable(projectPath)) return;
+    RECO_IA_PENDIENTE = false;
+    renderRecomendacion();
+    $('expRecoEstado').textContent = 'No se pudo consultar la IA; la orientación gratuita sigue disponible.';
+  }
+}
+
+function renderOrientacionPruebas(datos){
+  const caja=$('expOrientacion');
+  if(!caja) return;
+  caja.classList.toggle('hide', !datos);
+  if(!datos) return;
+  const r=datos.resumen || {};
+  $('expOrientacionResumen').textContent = `${r.recomendada || 0} recomendadas · ${r.revisar || 0} para revisar · ${r.no_soportada || 0} fuera del soporte. Tú decides cuáles incluir.`;
+  $('expAplicarObjetivos').disabled=!(r.recomendada > 0);
+  const metodos=datos.metodos_no_seleccionables || [];
+  $('expMetodosNoDisponibles').innerHTML = metodos.length ? `<details><summary>${metodos.length} ${metodos.length === 1 ? 'método dentro de una clase todavía no seleccionable' : 'métodos dentro de clases todavía no seleccionables'}</summary><p>La lógica puede estar en estos métodos. Probar una fábrica que devuelve el servicio no comprueba sus métodos.</p><ul>${metodos.map(m=>`<li>${escHtml(m.modulo)} · ${escHtml(m.clase)}.${escHtml(m.nombre)}</li>`).join('')}</ul></details>` : '';
+}
+
+function aplicarSeleccionRecomendada(){
+  MODULES.filter(m=>m.sel && !m.error).forEach(m=>m.fns.forEach(f=>{
+    f.inc = !f.noSoportada && !!f.orientacion && f.orientacion.categoria === 'recomendada';
+  }));
+  renderFns();
+  guardarSeleccionExplorar();
 }
 // Llega del backend (DesktopAPI.obtener_vista_previa) cuando la IA respondió o falló.
 // Si la persona ya abrió otro proyecto, se ignora.
@@ -869,8 +930,8 @@ function renderFns(){
   const fns = filasFunciones(), eps = filasEndpoints();
   const fnsVis = fns.filter(funcionVisible);
   $('fnTable').innerHTML = fnsVis.map(({m, mi, f, fi}) => `<tr>
-      <td class="col-incl"><input type="checkbox" class="exp-caja" aria-label="Incluir función: ${escHtml(f.n)}" ${f.inc ? 'checked' : ''} onchange="toggle(${mi},${fi},'inc')"></td>
-      <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div></td>
+      <td class="col-incl"><input type="checkbox" class="exp-caja" aria-label="Incluir función: ${escHtml(f.n)}" ${f.inc ? 'checked' : ''} ${f.noSoportada ? `disabled title="${escHtml(f.noSoportada)}"` : ''} onchange="toggle(${mi},${fi},'inc')"></td>
+      <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${!f.noSoportada && tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div>${f.noSoportada ? `<div class="sub" role="note">Fuera del alcance: ${escHtml(f.noSoportada)}</div>` : f.orientacion ? `<div class="sub" role="note"><b>${f.orientacion.categoria === 'recomendada' ? 'Recomendada para empezar' : 'Revisar antes de usar IA'}</b> · ${escHtml(f.orientacion.motivo)}</div>` : ''}</td>
       <td>${textoComplejidad(f.br)}</td>
       <td>${textoDesdeUltimaVez(m)}</td>
       <td class="col-prof"><input type="checkbox" class="exp-caja" aria-label="Profundizar: ${escHtml(f.n)}" ${f.crit ? 'checked' : ''} ${f.inc ? '' : 'disabled'} title="${f.inc ? 'Profundizar: solicita un análisis más exhaustivo de la función. Se aplica si activas Profundizar en la configuración de pruebas.' : 'Incluye la función para poder profundizar en ella.'}" onchange="toggle(${mi},${fi},'crit')"></td>
@@ -883,14 +944,15 @@ function renderFns(){
   const epsSel = eps.filter(r => endpointElegible(r.e) && r.e.inc).length;
   const total = fnsSel + epsSel;
   $('fnCount').textContent = `${total} ${total === 1 ? 'seleccionada' : 'seleccionadas'}`;
-  $('resumenFuncionesSub').textContent = `${fnsSel} ${fnsSel === 1 ? 'seleccionada' : 'seleccionadas'}`;
+  const noSoportadas = fns.filter(r => r.f.noSoportada).length;
+  $('resumenFuncionesSub').textContent = `${fnsSel} ${fnsSel === 1 ? 'seleccionada' : 'seleccionadas'}${noSoportadas ? ` · ${noSoportadas} fuera del alcance` : ''}`;
   $('resumenEndpointsSub').textContent = `${epsSel} ${epsSel === 1 ? 'seleccionado' : 'seleccionados'}`;
 
   // El selector tiene alcance explícito por tipo y nunca cambia el otro tipo de objetivo.
   const esFns = VISTA_OBJETIVOS === 'funciones';
   const vistaTodas = esFns ? fns : eps;
   const vistaVisibles = esFns ? fnsVis : eps.filter(endpointVisible);
-  const marcables = esFns ? vistaTodas.map(r => r.f) : vistaTodas.map(r => r.e).filter(endpointElegible);
+  const marcables = esFns ? vistaTodas.map(r => r.f).filter(f => !f.noSoportada) : vistaTodas.map(r => r.e).filter(endpointElegible);
   const marcadas = marcables.filter(o => o.inc).length;
   $('expTodoTxt').textContent = esFns ? 'Seleccionar todas las funciones' : 'Seleccionar todos los endpoints';
   $('expTodoN').textContent = marcables.length;
@@ -909,7 +971,7 @@ function renderFns(){
 
 // El alcance es el tipo activo completo. La búsqueda solo filtra la tabla, no cambia la selección.
 function seleccionarTodosObjetivos(seleccionado){
-  if(VISTA_OBJETIVOS === 'funciones') filasFunciones().forEach(r => { r.f.inc = !!seleccionado; });
+  if(VISTA_OBJETIVOS === 'funciones') filasFunciones().forEach(r => { r.f.inc = !!seleccionado && !r.f.noSoportada; });
   else filasEndpoints().filter(r => endpointElegible(r.e)).forEach(r => { r.e.inc = !!seleccionado; });
   renderFns();
   guardarSeleccionExplorar();
@@ -918,6 +980,7 @@ function seleccionarTodosObjetivos(seleccionado){
 // Incluir una función o un endpoint no cambia las carpetas incluidas; Profundizar no altera Incluir.
 function toggle(mi,fi,k){
   const m = MODULES[mi];
+  if(m.fns[fi].noSoportada) return;
   m.fns[fi][k] = !m.fns[fi][k];
   renderFns();
   guardarSeleccionExplorar();
@@ -966,7 +1029,7 @@ function obtenerSeleccionObjetivos(){
   return MODULES.filter(m => m.sel && moduloTieneObjetivos(m)).map(m => ({
     ruta: m.path,
     integraciones: integracionesIncluidas(m).map(i => i.n),
-    funciones: conFns ? (m.fns || []).filter(f => f.inc).map(f => f.n) : [],
+    funciones: conFns ? (m.fns || []).filter(f => f.inc && !f.noSoportada).map(f => f.n) : [],
     endpoints: conEps ? (m.endpoints || []).filter(e => endpointElegible(e) && e.inc).map(e => e.objetivo) : [],
     criticas: (conFns ? (m.fns || []).filter(f => f.inc && f.crit).map(f => f.n) : [])
       .concat(conEps ? (m.endpoints || []).filter(e => endpointElegible(e) && e.inc && e.crit).map(e => e.objetivo) : [])

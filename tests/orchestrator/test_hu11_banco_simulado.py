@@ -41,7 +41,9 @@ def imagen_base() -> str:
 
 @pytest.mark.docker
 def test_banco_con_ia_simulada_detecta_los_bugs_sembrados(imagen_base: str) -> None:
-    [modulo] = analizar_proyecto(BANCO)["modulos"]
+    modulo = next(
+        m for m in analizar_proyecto(BANCO)["modulos"] if m["ruta"] == "banco_mvp.py"
+    )
     tracker = TokenTracker()
     cliente = FakeLLMClient()
     orquestador = Orquestador(

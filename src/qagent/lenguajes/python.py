@@ -70,7 +70,15 @@ def _agregar_integraciones(
         config = cargar_configuracion(simulado=True).config
         limites = config.integracion if config is not None else Integracion()
         cadenas = candidatas(
-            estructura["modulos"],
+            [
+                {
+                    **m,
+                    "funciones": [
+                        f for f in m.get("funciones", []) if not f.get("no_soportada")
+                    ],
+                }
+                for m in estructura["modulos"]
+            ],
             lector_de_proyecto(raiz),
             profundidad_max=limites.profundidad_max,
             max_funciones=limites.max_funciones,
@@ -106,6 +114,35 @@ class PythonAdapter(LanguageAdapter):
     tipos_prueba = ("funcion", "endpoint", "mutacion", "integracion")
     motor_mutacion = "mutmut"
     comprobar_librerias_sistema = True
+
+    def motivo_funcion_no_soportada(self, funcion: dict[str, Any]) -> str | None:
+        """Expone los componentes Python que el análisis identificó fuera del alcance."""
+        return funcion.get("no_soportada")
+
+    def orientar_modulo(self, raiz: Path, modulo: dict[str, Any]) -> dict[str, Any]:
+        """Orienta la Vista previa por lectura estática; conserva el análisis de la corrida."""
+        import tokenize
+
+        from qagent.analysis.aptitud_python import anotar_aptitud
+        from qagent.analysis.arbol_ts import parsear
+
+        copia = {**modulo, "funciones": [dict(f) for f in modulo.get("funciones", [])]}
+        archivo = raiz / modulo["ruta"]
+        try:
+            if archivo.is_symlink() or not archivo.resolve().is_relative_to(
+                raiz.resolve()
+            ):
+                raise ValueError("La fuente no está dentro del proyecto")
+            with tokenize.open(archivo) as flujo:
+                arbol = parsear(flujo.read())
+            anotar_aptitud(copia, arbol)
+        except (OSError, ValueError, SyntaxError, UnicodeError):
+            for funcion in copia["funciones"]:
+                funcion["aptitud_pruebas"] = {
+                    "categoria": "revisar",
+                    "motivo": "No se pudo leer el contexto estático de la función; revisa el archivo antes de generar pruebas.",
+                }
+        return copia
 
     def archivos_fuente(self, raiz: str | os.PathLike[str]) -> list[str]:
         """Fuentes Python con las mismas exclusiones que el analizador histórico."""

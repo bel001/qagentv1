@@ -80,7 +80,7 @@ def test_corrida_completa_registra_cero_tokens_en_log_json(
     assert resumen["es_simulado"] is True
 
     # Verificar lectura directa del archivo JSON
-    with open(ruta_log, "r", encoding="utf-8") as f:
+    with open(ruta_log, encoding="utf-8") as f:
         datos_disco = json.load(f)
 
     assert datos_disco["total_tokens"] == 0
@@ -236,7 +236,11 @@ def test_el_banco_tiene_casos_grabados_para_todas_sus_funciones() -> None:
 
     grabaciones = cargar_grabaciones(RUTA_GRABACIONES)
     banco = Path(__file__).resolve().parents[2] / "bench"
-    [modulo] = analizar_proyecto(banco)["modulos"]
+    # Las grabaciones de este banco corresponden a banco_mvp.py. Otros bancos
+    # pueden estar en subcarpetas sin excluirlas del análisis de proyectos reales.
+    [modulo] = [
+        m for m in analizar_proyecto(banco)["modulos"] if m["ruta"] == "banco_mvp.py"
+    ]
 
     for funcion in modulo["funciones"]:
         assert grabaciones.get(f"banco_mvp.py::{funcion['nombre']}"), funcion["nombre"]

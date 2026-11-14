@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -54,6 +56,9 @@ def pytest_collection_modifyitems(
         cliente = _cliente_docker()
         if cliente is not None:
             config.stash[_IMAGENES_ANTES] = soporte_docker.etiquetas_qagent(cliente)
+            config._qagent_test_session = uuid.uuid4().hex
+            config._qagent_previous_session = os.environ.get("QAGENT_TEST_SESSION")
+            os.environ["QAGENT_TEST_SESSION"] = config._qagent_test_session
 
 
 def pytest_sessionfinish(session: pytest.Session) -> None:
@@ -61,13 +66,27 @@ def pytest_sessionfinish(session: pytest.Session) -> None:
     antes = session.config.stash.get(_IMAGENES_ANTES, None)
     if antes is None:
         return
-    cliente = _cliente_docker()
-    if cliente is None:
-        return
-    nuevas = soporte_docker.imagenes_creadas(
-        antes, soporte_docker.etiquetas_qagent(cliente)
-    )
-    session.config.stash[_LIMPIEZA] = soporte_docker.borrar_imagenes(cliente, nuevas)
+    sesion = getattr(session.config, "_qagent_test_session", None)
+    try:
+        cliente = _cliente_docker()
+        if cliente is None:
+            return
+        nuevas = soporte_docker.imagenes_creadas(
+            antes, soporte_docker.etiquetas_qagent(cliente)
+        )
+        nuevas = [
+            t for t in nuevas if soporte_docker.imagen_de_sesion(cliente, t, sesion)
+        ]
+        session.config.stash[_LIMPIEZA] = soporte_docker.borrar_imagenes(
+            cliente, nuevas
+        )
+    finally:
+        if os.environ.get("QAGENT_TEST_SESSION") == sesion:
+            anterior = getattr(session.config, "_qagent_previous_session", None)
+            if anterior is None:
+                os.environ.pop("QAGENT_TEST_SESSION", None)
+            else:
+                os.environ["QAGENT_TEST_SESSION"] = anterior
 
 
 def pytest_terminal_summary(terminalreporter, config: pytest.Config) -> None:

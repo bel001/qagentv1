@@ -39,7 +39,7 @@ def test_seleccion_persiste_y_se_envia_al_backend() -> None:
     monitor = leer("componentes/monitor/monitor.js")
 
     assert "function obtenerSeleccionObjetivos" in vista
-    assert "filter(f => f.inc).map(f => f.n)" in vista
+    assert "filter(f => f.inc && !f.noSoportada).map(f => f.n)" in vista
     assert (
         "start_run(projectPath, profile, obtenerSeleccionObjetivos(), INFERIR_SIN_DOCSTRING"
         in monitor

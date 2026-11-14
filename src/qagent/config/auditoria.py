@@ -61,8 +61,8 @@ class Hallazgo:
 def archivos_del_repositorio(raiz: Path) -> list[Path]:
     """Archivos versionados con `git ls-files`; sin Git, todos los de la carpeta."""
     try:
-        salida = subprocess.run(
-            ["git", "-C", str(raiz), "ls-files", "-z"],
+        salida = subprocess.run(  # noqa: S603 -- argumentos fijos de git, sin shell
+            ["git", "-C", str(raiz), "ls-files", "-z"],  # noqa: S607 -- Git se verifica en el entorno
             capture_output=True,
             timeout=30,
             check=True,

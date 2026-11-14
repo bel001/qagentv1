@@ -56,7 +56,12 @@ def construir_html_informe(
     specs_txt = esc(specs.split(" · guardados en")[0])
     metricas = datos["metricas"]
     contadores = esc(
-        f"{datos.get('total_seleccionados', total_fn)} seleccionados · "
+        (
+            f"{datos['total_descubiertos']} descubiertos · "
+            if datos.get("total_descubiertos") is not None
+            else ""
+        )
+        + f"{datos.get('total_seleccionados', total_fn)} seleccionados · "
         f"{datos.get('total_elegibles', total_fn)} elegibles · "
         f"{datos.get('total_procesados', total_fn)} procesados · "
         f"{datos.get('total_omitidos', 0)} omitidos · "

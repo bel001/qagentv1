@@ -24,7 +24,9 @@ def _cliente():
     contenedor = cliente.containers.run.return_value
     contenedor.wait.return_value = {"StatusCode": 1}
     contenedor.attrs = {"State": {"OOMKilled": False}}
-    contenedor.logs.return_value = b"QAGENT_JAVA_ETAPA=ejecucion\n"
+    contenedor.logs.side_effect = lambda **kwargs: iter(
+        [b"QAGENT_JAVA_ETAPA=ejecucion\n"]
+    )
     return cliente, contenedor
 
 

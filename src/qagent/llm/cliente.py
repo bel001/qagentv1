@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Any, Protocol
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 from qagent.llm.fake import FakeLLMClient
@@ -152,8 +153,18 @@ class TransporteHTTP:
         Raises:
             ErrorLLM: Si la solicitud o la respuesta no son válidas.
         """
+        partes = urlsplit(url)
+        if (
+            partes.scheme != "https"
+            or not partes.hostname
+            or partes.username
+            or partes.password
+        ):
+            raise ErrorLLM(
+                "El endpoint del proveedor debe usar HTTPS sin credenciales en la URL."
+            )
         cuerpo = json.dumps(datos).encode("utf-8") if datos is not None else None
-        solicitud = Request(
+        solicitud = Request(  # noqa: S310 -- esquema y autoridad validados arriba
             url=url,
             data=cuerpo,
             headers=cabeceras,
@@ -162,7 +173,7 @@ class TransporteHTTP:
 
         plazo = time.monotonic() + timeout_s
         try:
-            with urlopen(solicitud, timeout=timeout_s) as respuesta:
+            with urlopen(solicitud, timeout=timeout_s) as respuesta:  # noqa: S310 -- solo HTTPS validado
                 contenido = _leer_con_plazo(respuesta, plazo).decode("utf-8")
         except HTTPError as error:
             raise error_http(
@@ -342,7 +353,9 @@ class ClienteLLMReal:
         except Exception as error:
             mensaje = str(error).replace(self._clave, "***")
             if isinstance(error, ErrorLLM):
-                raise ErrorLLM(mensaje) from error
+                error.args = (mensaje,)
+                error.detalle = error.detalle.replace(self._clave, "***")
+                raise
             raise ErrorLLM(f"Error al llamar al proveedor LLM: {mensaje}") from error
 
     def _enviar_con_reintentos(

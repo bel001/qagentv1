@@ -106,6 +106,7 @@ def escribir_corrida(
     objetivos_omitidos: int | None = None,
     omitidos: list[dict[str, str]] | None = None,
     fuera_de_la_corrida: list[dict[str, Any]] | None = None,
+    total_descubiertos: int | None = None,
 ) -> RutasCorrida:
     """Genera, valida y escribe log.json y results.json de una corrida.
 
@@ -158,6 +159,8 @@ def escribir_corrida(
         objetivos_omitidos=objetivos_omitidos,
     )
     results["rama"] = rama
+    if total_descubiertos is not None:
+        results["total_descubiertos"] = total_descubiertos
     if omitidos is not None:
         results["omitidos"] = list(omitidos)
     if fuera_de_la_corrida:

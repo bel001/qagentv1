@@ -465,7 +465,8 @@ function renderCabeceraBandeja(todos, v){
     tiempo: ['tiempo agotado', 'tiempos agotados'], repetir: ['requiere corrida nueva', 'requieren corrida nueva'],
     omitida: ['no se probó', 'no se probaron'], paso: ['pasó', 'pasaron'],
   };
-  $('bnjResumen').textContent = `${seleccionados} seleccionados · ${elegibles} elegibles · ${procesados} procesados${sinPrueba ? ` (${sinPrueba} sin prueba)` : ''} · ${omitidas} omitidos · ${pendientes} pendientes: ` +
+  const descubierto = v && Number.isInteger(v.total_descubiertos) ? `${v.total_descubiertos} descubiertos · ` : '';
+  $('bnjResumen').textContent = descubierto + `${seleccionados} seleccionados · ${elegibles} elegibles · ${procesados} procesados${sinPrueba ? ` (${sinPrueba} sin prueba)` : ''} · ${omitidas} omitidos · ${pendientes} pendientes: ` +
     BANDEJAS.map(b => [n(b.k), b.k]).filter(([c]) => c).map(([c, k]) => `${c} ${etiquetasResumen[k][c === 1 ? 0 : 1]}`).join(' · ');
 }
 function renderFiltrosBandeja(todos){
@@ -509,7 +510,7 @@ function renderDetalleBandeja(e){
     ${explicacion ? `<p class="bnj-explicacion">${escHtml(explicacion)}</p>` : ''}
     ${e.errorPlanner ? `<details class="np-detalle"><summary>Ver motivo del fallo de planificación</summary><pre class="np-log">${escHtml(e.errorPlanner)}</pre></details>` : ''}
     ${e.explicacionSimple ? explicacionSimple(e.explicacionSimple) : ''}
-    ${e.omitido && e.tipo === 'funcion' ? '<p class="np-meta">Para probarla, describe en su docstring qué debe devolver o qué error lanza. QAgent no deduce el resultado esperado ejecutando el código.</p>' : ''}
+    ${e.omitido && e.tipo === 'funcion' ? '<p class="np-meta">Esta función no se ejecutó ni recibió un veredicto. Consulta el motivo de omisión: puede faltar evidencia, no haber casos propuestos o tratarse de un componente no soportado.</p>' : ''}
     ${cargando}
     ${e.fallo ? `<div class="bnj-valores">
         <div class="bnj-esperado"><span class="bnj-caja-etq">Esperado</span><pre>${escHtml(e.fallo.esperado ?? '—')}</pre></div>

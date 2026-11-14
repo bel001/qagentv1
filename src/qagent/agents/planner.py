@@ -33,6 +33,7 @@ from qagent import contracts
 from qagent.contracts import ContratoInvalido, categoria_de, es_caso_de_error
 from qagent.lenguajes import LanguageAdapter, adaptador_de_contrato, adaptador_para
 from qagent.llm import ClienteLLM, TokenTracker
+from qagent.llm.cliente import ErrorLLM
 
 #: Perfil de comprobación rápida (#75); igual que `qagent.storage.registro.PERFIL_HUMO`.
 PERFIL_HUMO = "humo"
@@ -121,6 +122,7 @@ class PlannerAgent:
         self._casos_invalidos = 0
         # #138: casos triviales descartados por objetivo en la última llamada.
         self._triviales: dict[str, int] = {}
+        self._rechazos: dict[str, list[str]] = {}
 
     def _encabezado(self, tipo: str) -> dict[str, Any]:
         """Campos de `planner_contract.v3` que salen del adaptador, no del modelo."""
@@ -159,11 +161,19 @@ class PlannerAgent:
         self.omitidas = {}
         self._casos_invalidos = 0
         self._triviales = {}
-        funciones = {f["nombre"]: f for f in modulo.get("funciones", [])}
+        self._rechazos = {}
+        funciones = {}
+        for funcion in modulo.get("funciones", []):
+            motivo = self.adaptador.motivo_funcion_no_soportada(funcion)
+            if motivo:
+                self.omitidas[funcion["nombre"]] = motivo
+            else:
+                funciones[funcion["nombre"]] = funcion
         if not funciones:
             return []
 
-        prompt = self.reglas.prompt_funciones(modulo, self.es_humo)
+        modulo_planificable = {**modulo, "funciones": list(funciones.values())}
+        prompt = self.reglas.prompt_funciones(modulo_planificable, self.es_humo)
         respuesta = self.cliente.generar(prompt, rol="planner")
         self.tracker.registrar(
             agente="planner",
@@ -187,13 +197,15 @@ class PlannerAgent:
         # El modelo omite las funciones que no puede respaldar (lo pide el prompt).
         cubiertas = {contrato["objetivo"] for contrato in plan} | set(self.omitidas)
         intentadas = {
-            e.get("objetivo") for e in propuesta if isinstance(e, dict)
+            e["objetivo"]
+            for e in propuesta
+            if isinstance(e, dict) and isinstance(e.get("objetivo"), str)
         } & set(funciones)
         for nombre, funcion in funciones.items():
             if nombre not in cubiertas and nombre not in intentadas:
                 self._omitir(nombre, funcion)
 
-        self._inferir(modulo, funciones, plan)
+        self._inferir(modulo_planificable, funciones, plan)
 
         if not plan and self.descartados and not self.omitidas:
             detalle = "; ".join(self.descartados[:3])
@@ -241,7 +253,7 @@ class PlannerAgent:
                 self.descartados.append("un elemento del plan no es un objeto JSON")
                 continue
             nombre = elemento.get("objetivo")
-            componente = componentes.get(nombre)
+            componente = componentes.get(nombre) if isinstance(nombre, str) else None
             if componente is None or nombre in self.omitidas:
                 self.descartados.append(f"componente desconocido: {nombre!r}")
                 continue
@@ -339,7 +351,7 @@ class PlannerAgent:
             self.descartados.append("un elemento del plan no es un objeto JSON")
             return None
         nombre = elemento.get("objetivo")
-        if nombre not in funciones:
+        if not isinstance(nombre, str) or nombre not in funciones:
             self.descartados.append(f"objetivo desconocido: {nombre!r}")
             return None
         if nombre in vistos:
@@ -427,6 +439,11 @@ class PlannerAgent:
             contexto = self.proveedor_inferencia(modulo["ruta"], nombre)
             if contexto is not None:
                 contextos[nombre] = contexto
+            else:
+                self.omitidas[nombre] = (
+                    "No se pudo reunir contexto estático para inferir casos; "
+                    "no se consultó al LLM para esta función."
+                )
         if not contextos:
             return
 
@@ -434,7 +451,15 @@ class PlannerAgent:
         prompt = prompt_inferidas(
             reducido, {n: c.a_dict() for n, c in contextos.items()}, self.es_humo
         )
-        respuesta = self.cliente.generar(prompt, rol="planner")
+        try:
+            respuesta = self.cliente.generar(prompt, rol="planner")
+        except ErrorLLM:
+            self.avisos.append("inferencia: no se pudo consultar al proveedor LLM")
+            for nombre in contextos:
+                self.omitidas[nombre] += (
+                    "; inferencia no disponible por un error del proveedor"
+                )
+            return
         self.tracker.registrar(
             agente="planner",
             modelo=respuesta.modelo,
@@ -448,13 +473,23 @@ class PlannerAgent:
             propuesta = _leer_lista(respuesta.contenido)
         except ErrorRespuestaPlanner as error:
             self.avisos.append(f"inferencia: respuesta no válida ({error})")
-            self._sin_inferencia(contextos)
+            for nombre in contextos:
+                self.omitidas[nombre] = (
+                    "La inferencia devolvió una respuesta con formato inválido; "
+                    "no se obtuvieron casos verificables."
+                )
             return
 
+        propuestos: set[str] = set()
         for elemento in propuesta:
             nombre = elemento.get("objetivo") if isinstance(elemento, dict) else None
-            if nombre not in contextos or any(c["objetivo"] == nombre for c in plan):
+            if (
+                not isinstance(nombre, str)
+                or nombre not in contextos
+                or any(c["objetivo"] == nombre for c in plan)
+            ):
                 continue
+            propuestos.add(nombre)
             funcion = {
                 **funciones[nombre],
                 "contexto_inferencia": contextos[nombre].a_dict(),
@@ -475,18 +510,42 @@ class PlannerAgent:
                 f"{nombre}: sin docstring; se infirieron {len(casos)} caso(s) leyendo "
                 "su código y su uso (prueba de regresión, sin contrato documentado)"
             )
-        self._sin_inferencia(contextos)
+        self._sin_inferencia(contextos, propuestos)
 
-    def _sin_inferencia(self, contextos: dict[str, Any]) -> None:
-        """Deja constancia en las omitidas de que la inferencia tampoco alcanzó."""
+    def _sin_inferencia(
+        self, contextos: dict[str, Any], propuestos: set[str] | None = None
+    ) -> None:
+        """Distingue ausencia de propuestas y propuestas rechazadas, sin inventar casos."""
         for nombre in contextos:
             if nombre in self.omitidas:
-                self.omitidas[nombre] += (
-                    "; la inferencia estática tampoco encontró evidencia suficiente "
-                    "(agrega un docstring o tipos para poder probarla)"
-                )
+                rechazos = self._rechazos.get(nombre, [])
+                if rechazos:
+                    detalle = "; ".join(dict.fromkeys(rechazos))[:900]
+                    self.omitidas[nombre] = (
+                        "La inferencia propuso casos, pero se descartaron porque no "
+                        f"cumplían el contrato o la evidencia exigida: {detalle}"
+                    )
+                elif nombre in (propuestos or set()):
+                    self.omitidas[nombre] = (
+                        "La inferencia respondió para esta función, pero no propuso "
+                        "casos aceptables para el perfil seleccionado."
+                    )
+                else:
+                    self.omitidas[nombre] = (
+                        "La IA no propuso casos para esta función en la inferencia. "
+                        "No se generó una prueba y no se comprobó su comportamiento."
+                    )
 
     def _casos_validos(
+        self, nombre: str, casos: Any, funcion: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """Valida casos y conserva por función los motivos deterministas de rechazo."""
+        inicio = len(self.descartados)
+        validos = self._validar_casos(nombre, casos, funcion)
+        self._rechazos[nombre] = self.descartados[inicio:]
+        return validos
+
+    def _validar_casos(
         self, nombre: str, casos: Any, funcion: dict[str, Any] | None = None
     ) -> list[dict[str, Any]]:
         """Se queda con los casos que cumplen el schema; descarta el resto.
@@ -651,7 +710,7 @@ class PlannerAgent:
                 self.descartados.append("un elemento del plan no es un objeto JSON")
                 continue
             objetivo = elemento.get("objetivo")
-            if objetivo not in endpoints:
+            if not isinstance(objetivo, str) or objetivo not in endpoints:
                 self.descartados.append(f"endpoint desconocido: {objetivo!r}")
                 continue
             if any(c["objetivo"] == objetivo for c in plan):

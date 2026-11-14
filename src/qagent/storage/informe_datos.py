@@ -367,6 +367,7 @@ def datos_informe(
         "duracion_etapas": vista.get("duracion_etapas"),
         "total_funciones": results["resumen"]["total_funciones"],
         "total_seleccionados": vista.get("total_seleccionados"),
+        "total_descubiertos": vista.get("total_descubiertos"),
         "total_elegibles": vista.get("total_elegibles"),
         "total_procesados": vista.get("total_procesados"),
         "total_pendientes": vista.get("total_pendientes"),

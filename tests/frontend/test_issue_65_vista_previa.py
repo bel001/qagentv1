@@ -199,7 +199,7 @@ def test_archivos_sin_funciones() -> None:
 def test_conserva_la_seleccion_ast() -> None:
     assert "function obtenerSeleccionObjetivos" in VISTA_JS
     assert "m.sel && moduloTieneObjetivos(m)" in VISTA_JS
-    assert "filter(f => f.inc).map(f => f.n)" in VISTA_JS
+    assert "filter(f => f.inc && !f.noSoportada).map(f => f.n)" in VISTA_JS
 
 
 # 28. La vista previa sigue mostrando endpoints

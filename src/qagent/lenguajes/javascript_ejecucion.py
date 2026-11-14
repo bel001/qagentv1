@@ -63,7 +63,7 @@ def variables_node() -> dict[str, str]:
         "NODE_ENV": "test",
         "NO_COLOR": "1",
         # Vitest guarda un token en $HOME; el resto del contenedor es de solo lectura.
-        "HOME": "/tmp",
+        "HOME": "/tmp",  # noqa: S108 -- tmpfs privado del contenedor
     }
 
 

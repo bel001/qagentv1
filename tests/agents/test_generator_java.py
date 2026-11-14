@@ -57,7 +57,13 @@ def preparar(
     archivo.parent.mkdir(parents=True)
     archivo.write_text(fuente, encoding="utf-8")
     [modulo] = JavaAdapter().analizar(tmp_path)["modulos"]
-    funcion = next(f for f in modulo["funciones"] if f["nombre"] == objetivo)
+    # El oráculo también se prueba contra contratos antiguos de objetivos que
+    # hoy se excluyen de la selección por tener dependencias inyectadas.
+    funcion = next(
+        f
+        for f in [*modulo["funciones"], *modulo.get("funciones_excluidas", [])]
+        if f["nombre"] == objetivo
+    )
     return {
         "version": "3",
         "lenguaje": "java",

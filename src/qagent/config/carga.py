@@ -29,10 +29,26 @@ import os
 import re
 import shutil
 import sys
+import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
+from functools import wraps
 from pathlib import Path
 from typing import Any
+
+_ESTADO_LOCK = threading.RLock()
+
+
+def _estado_serializado(funcion):
+    """Serializa las actualizaciones del estado compartido del proceso."""
+
+    @wraps(funcion)
+    def ejecutar(*args, **kwargs):
+        with _ESTADO_LOCK:
+            return funcion(*args, **kwargs)
+
+    return ejecutar
+
 
 from qagent.contracts import LENGUAJES
 from qagent.llm.cliente import VARIABLE_SIMULADA, es_modo_simulado, valor_simulado
@@ -325,6 +341,7 @@ class FiltroSecretos(logging.Filter):
 _FILTRO_RAIZ: FiltroSecretos | None = None
 
 
+@_estado_serializado
 def instalar_filtro_logs(claves: Claves) -> FiltroSecretos:
     """Agrega `FiltroSecretos` a los handlers del logger raíz y lo devuelve.
 
@@ -429,6 +446,7 @@ def modo_simulado(ruta_env: str | Path | None = None) -> bool:
     return simulado_desde_env(ruta_env)
 
 
+@_estado_serializado
 def aplicar_simulacion_desde_env(ruta_env: str | Path | None = None) -> bool:
     """Si el `.env` activa la IA simulada, lo deja activo para todo el programa.
 
@@ -452,6 +470,7 @@ def aplicar_simulacion_desde_env(ruta_env: str | Path | None = None) -> bool:
 _SIMULACION_COPIADA = False
 
 
+@_estado_serializado
 def refrescar_simulacion_desde_env(ruta_env: str | Path | None = None) -> bool:
     """Vuelve a leer `QAGENT_FAKE_LLM` del `.env` con la app abierta (#251).
 

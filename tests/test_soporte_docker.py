@@ -35,6 +35,21 @@ class ImagenesFalsas:
             raise RuntimeError("image is being used by a running container")
         self.borradas.append(etiqueta)
 
+    def get(self, etiqueta: str):
+        import os
+
+        return SimpleNamespace(
+            attrs={
+                "Config": {
+                    "Labels": {
+                        "qagent.test.session": os.environ.get("QAGENT_TEST_SESSION")
+                    }
+                    if etiqueta != "qagent-sandbox:req-ajena"
+                    else {}
+                }
+            }
+        )
+
 
 def cliente(*estados: list[str], fallan: tuple[str, ...] = ()):
     return SimpleNamespace(images=ImagenesFalsas(*estados, fallan=fallan))

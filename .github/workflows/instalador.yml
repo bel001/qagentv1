@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.13.17"
       - name: Dependencias (con PyInstaller, versiones fijadas)
-        run: python -m pip install -c packaging/constraints.txt -e ".[empaquetar]"
+        run: python -m pip install -c packaging/constraints.txt -c packaging/runtime-windows-py313.lock.txt -e ".[dev,empaquetar]"
       - name: Inno Setup 6
         run: choco install innosetup --no-progress -y
       - name: QAgent.exe e instalador

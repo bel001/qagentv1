@@ -11,6 +11,7 @@ from qagent import contracts
 from qagent.agents.planner import PlannerAgent
 from qagent.analysis.inferencia import ContextoInferencia
 from qagent.llm import RespuestaLLM, TokenTracker
+from qagent.llm.cliente import SinConexion
 
 MODULO = {
     "ruta": "calc.py",
@@ -91,6 +92,51 @@ def test_infiere_una_funcion_sin_docstring_con_evidencia() -> None:
     assert any("sin docstring" in aviso for aviso in planner.avisos)
 
 
+@pytest.mark.parametrize("objetivo", [[], {}, ["producto"], 42, None])
+def test_objetivo_malformado_no_impide_inferir_las_funciones(objetivo: Any) -> None:
+    cliente = ClienteSecuencia(
+        [{"objetivo": objetivo, "casos": []}],
+        [
+            {"objetivo": objetivo, "casos": []},
+            {"objetivo": "producto", "casos": [_caso()]},
+        ],
+    )
+    planner = _planner(cliente)
+
+    assert [c["objetivo"] for c in planner.planificar(MODULO)] == ["producto"]
+    assert any("objetivo desconocido" in d for d in planner.descartados)
+
+
+def test_error_de_red_en_inferencia_conserva_el_plan_documentado() -> None:
+    class ClienteSinConexion(ClienteSecuencia):
+        def generar(self, prompt: str, rol: str = "generator") -> RespuestaLLM:
+            if self.prompts:
+                raise SinConexion("Proveedor desconectado")
+            return super().generar(prompt, rol)
+
+    cliente = ClienteSinConexion(
+        [
+            {
+                "objetivo": "doble",
+                "casos": [
+                    {
+                        "id": "doble_normal",
+                        "entrada": {"x": 3},
+                        "valor_esperado": 6,
+                        "origen": "docstring",
+                        "categoria": "normal",
+                    }
+                ],
+            }
+        ]
+    )
+    planner = _planner(cliente)
+
+    assert [c["objetivo"] for c in planner.planificar(MODULO)] == ["doble"]
+    assert "error del proveedor" in planner.omitidas["producto"]
+    assert any("no se pudo consultar" in a for a in planner.avisos)
+
+
 def test_el_prompt_de_inferencia_lleva_el_contexto_y_no_las_funciones_documentadas() -> (
     None
 ):
@@ -112,7 +158,8 @@ def test_evidencia_que_no_se_entrego_descarta_el_caso() -> None:
 
     assert planner.planificar(MODULO) == []
     assert "producto" in planner.omitidas
-    assert "inferencia estática tampoco" in planner.omitidas["producto"]
+    assert "propuso casos, pero se descartaron" in planner.omitidas["producto"]
+    assert "no se entregaron" in planner.omitidas["producto"]
     assert any("no se entregaron" in d for d in planner.descartados)
 
 

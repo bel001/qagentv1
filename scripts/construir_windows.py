@@ -5,7 +5,7 @@ Pasos que automatiza (TA-06):
   2. Inno Setup con `packaging/windows/qagent.iss` → `dist/windows/QAgent-<versión>-instalador.exe`
 
 Requisitos, una sola vez por PC:
-  pip install -c packaging/constraints.txt -e .[dev,empaquetar]   (instala PyInstaller)
+  pip install -c packaging/constraints.txt -c packaging/runtime-windows-py313.lock.txt -e .[dev,empaquetar]
   Inno Setup 6: https://jrsoftware.org/isdl.php  (o winget install JRSoftware.InnoSetup)
 
 Las versiones de las herramientas de empaquetado están fijadas en
@@ -23,6 +23,8 @@ import os
 import shutil
 import subprocess
 import sys
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as version_instalada
 from pathlib import Path
 
 if sys.version_info >= (3, 11):
@@ -82,6 +84,24 @@ def _correr(comando: list[str]) -> None:
     subprocess.run(comando, check=True, cwd=RAIZ)
 
 
+def diferencias_dependencias() -> list[str]:
+    """Comprueba presencia y versión de todas las dependencias del instalador."""
+    lock = RAIZ / "packaging/runtime-windows-py313.lock.txt"
+    diferencias = []
+    for linea in lock.read_text(encoding="utf-8").splitlines():
+        if not linea.strip() or linea.startswith("#"):
+            continue
+        nombre, esperada = linea.split("==", 1)
+        try:
+            actual = version_instalada(nombre)
+        except PackageNotFoundError:
+            diferencias.append(f"{nombre}: no está instalado, se requiere {esperada}")
+            continue
+        if actual != esperada:
+            diferencias.append(f"{nombre}: {actual}, se requiere {esperada}")
+    return diferencias
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
@@ -90,6 +110,16 @@ def main(argv: list[str] | None = None) -> int:
         help="solo genera la carpeta con QAgent.exe",
     )
     args = parser.parse_args(argv)
+    diferencias = diferencias_dependencias()
+    if diferencias:
+        print(
+            "El entorno no coincide con las versiones verificadas del instalador:\n"
+            + "\n".join(diferencias)
+        )
+        print(
+            'Usa un entorno limpio: pip install -c packaging/constraints.txt -c packaging/runtime-windows-py313.lock.txt -e ".[dev,empaquetar]"'
+        )
+        return 1
 
     aviso = aviso_version_python()
     if aviso:

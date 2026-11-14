@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -562,20 +561,10 @@ class RedactorIA:
             f"{json.dumps(entrada, ensure_ascii=False)}"
         )
         self._revisar_presupuesto(prompt)
+        self.tracker.fijar_contexto_hilo(str(objetivo.get("funcion")), None)
         respuesta = self._generar(prompt)
         modelo = respuesta.modelo or self.precio.modelo
-        self.tracker.fijar_contexto_hilo(str(objetivo.get("funcion")), None)
-        self.tracker.registrar(
-            agente=AGENTE,
-            modelo=modelo,
-            tokens_entrada=respuesta.tokens_entrada,
-            tokens_salida=respuesta.tokens_salida,
-            costo_usd=self.precio.costo(
-                respuesta.tokens_entrada, respuesta.tokens_salida
-            ),
-            es_simulado=self.es_simulado,
-            es_estimado=respuesta.es_estimado,
-        )
+
         explicacion = _explicacion_ia(respuesta.contenido, objetivo, run_id, modelo)
         try:
             contracts.validar_explicacion(explicacion, resultado_confiable=objetivo)
@@ -602,36 +591,36 @@ class RedactorIA:
                 )
 
     def _generar(self, prompt: str) -> RespuestaLLM:
-        """Llama al LLM en otro hilo y lo espera a lo sumo `tiempo_maximo_s`."""
-        salida: dict[str, Any] = {}
+        """Llama con plazo total y contabiliza cada respuesta una sola vez."""
+        from qagent.llm.llamada import generar_acotado
 
-        def llamar() -> None:
-            try:
-                try:
-                    salida["respuesta"] = self.cliente.generar(
-                        prompt,
-                        rol=AGENTE,
-                        timeout_s=self.tiempo_maximo_s,
-                        plazo_total_s=self.tiempo_maximo_s,
-                    )
-                except TypeError:
-                    salida["respuesta"] = self.cliente.generar(prompt, rol=AGENTE)
-            except Exception as error:  # noqa: BLE001 — se informa abajo
-                salida["error"] = error
+        contexto = self.tracker.contexto_actual()
 
-        hilo = threading.Thread(target=llamar, name="explicador-ia", daemon=True)
-        hilo.start()
-        hilo.join(self.tiempo_maximo_s)
-        if hilo.is_alive():
-            raise SinExplicacionIA(
-                f"el LLM no respondió en {self.tiempo_maximo_s:g} s (tiempo agotado)"
+        def registrar(respuesta: RespuestaLLM) -> None:
+            self.tracker.fijar_contexto_hilo(*contexto)
+            modelo = respuesta.modelo or self.precio.modelo
+            self.tracker.registrar(
+                agente=AGENTE,
+                modelo=modelo,
+                tokens_entrada=respuesta.tokens_entrada,
+                tokens_salida=respuesta.tokens_salida,
+                costo_usd=self.precio.costo(
+                    respuesta.tokens_entrada, respuesta.tokens_salida
+                ),
+                es_simulado=self.es_simulado,
+                es_estimado=respuesta.es_estimado,
             )
-        if "error" in salida:
-            error = salida["error"]
+
+        try:
+            return generar_acotado(
+                self.cliente, prompt, AGENTE, self.tiempo_maximo_s, registrar
+            )
+        except TimeoutError as error:
+            raise SinExplicacionIA("TimeoutError: " + _limpiar(str(error))) from error
+        except Exception as error:
             raise SinExplicacionIA(
                 f"el LLM falló: {type(error).__name__}: {_limpiar(str(error))}"
-            )
-        return salida["respuesta"]
+            ) from error
 
 
 def entrada_ia(

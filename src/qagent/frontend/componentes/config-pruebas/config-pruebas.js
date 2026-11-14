@@ -387,9 +387,10 @@ function renderTiposPrueba(){
   // issue 275 (ADR-016): funciones sin docstring que QAgent puede inferir (solo Python) entre las unitarias elegidas.
   const nInferibles = eleccionPruebas.unitarias === true ? mods.flatMap(m=>m.fns).filter(f=>f.inc && f.inferible).length : 0;
   const tokInferidas = nInferibles && INFERIR_SIN_DOCSTRING ? (estFor(profile==='reg_deep' ? 'reg' : profile).tokInferidas || 0) : 0;
+  const avisoTopeInferencia = ` Máximo ${LIMITE_INFERENCIA_POR_MODULO} funciones por archivo para este paso; las restantes se registran como omitidas. Puedes seleccionarlas en otra corrida.`;
   const filaInferencia = !mods.some(m=>m.fns.some(f=>f.inferible)) ? '' : `<label class="prep-casilla ${nInferibles ? '' : 'dis'}" data-caja="negra">
       <input type="checkbox" class="exp-caja" ${INFERIR_SIN_DOCSTRING && nInferibles ? 'checked' : ''} ${nInferibles ? '' : 'disabled'} onchange="elegirInferencia({inferir:this.checked})">
-      <span><b>Inferir funciones sin docstring</b><span class="prep-desc">${nInferibles ? `${nInferibles} ${nInferibles === 1 ? 'función sin docstring' : 'funciones sin docstring'}: QAgent deduce su resultado leyendo su código y su uso, sin ejecutarlo. Son pruebas de regresión, sin contrato documentado.${tokInferidas ? ` Estimación aparte: ~${tokInferidas.toLocaleString('es-PE')} tokens más.` : ''}` : 'Elige Unitarias con funciones sin docstring para usarla.'}</span></span>
+      <span><b>Inferir funciones sin docstring</b><span class="prep-desc">${nInferibles ? `${nInferibles} ${nInferibles === 1 ? 'función sin docstring' : 'funciones sin docstring'}: QAgent deduce su resultado leyendo su código y su uso, sin ejecutarlo. Son pruebas de regresión, sin contrato documentado.${avisoTopeInferencia}${tokInferidas ? ` Estimación aparte: ~${tokInferidas.toLocaleString('es-PE')} tokens más.` : ''}` : 'Elige Unitarias con funciones sin docstring para usarla.'}</span></span>
     </label>
     <label class="prep-casilla ${nInferibles && INFERIR_SIN_DOCSTRING ? '' : 'dis'}" data-caja="negra">
       <input type="checkbox" class="exp-caja" ${REVISAR_INFERIDOS && nInferibles && INFERIR_SIN_DOCSTRING ? 'checked' : ''} ${nInferibles && INFERIR_SIN_DOCSTRING ? '' : 'disabled'} onchange="elegirInferencia({revisar:this.checked})">
@@ -401,6 +402,11 @@ function renderTiposPrueba(){
     + (mods.some(m=>(m.integraciones || []).length)
       ? fila('integracion', 'Integración interna', nInt, 'cadena de funciones', 'cadenas de funciones', 'negra')
       : '');
+  const revisar = eleccionPruebas.unitarias === true || eleccionPruebas.integracion === true
+    ? mods.flatMap(m=>m.fns).filter(f=>f.inc && f.orientacion && f.orientacion.categoria === 'revisar') : [];
+  if (revisar.length && eleccionPruebas.modo !== 'repetir') {
+    $('prepTipos').innerHTML += `<div class="np-aviso np-aviso-info" role="note"><div><b>${revisar.length} función(es) requieren revisión</b><p>El Planner puede consumir tokens aunque después las omita. La recomendación estática es gratuita; tú decides si las incluyes.</p><button type="button" class="ini-btn" onclick="go('preview')">Revisar mi selección</button></div></div>`;
+  }
 }
 // Críticas: funciones y endpoints incluidos y marcados en Profundizar. Se muestran tres; el resto
 // se ve y se edita en la columna Profundizar de Explorar (visible con «Análisis a fondo»).

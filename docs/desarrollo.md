@@ -231,7 +231,7 @@ Las imágenes base se fijan por **digest** (el SHA256 del contenido), no solo po
 | `node:26.13.0-trixie-slim` (JavaScript/TypeScript) | `sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072` |
 | `mcr.microsoft.com/playwright:v1.64.1-noble` (humo E2E) | `sha256:2f05f8a734509a7b3f26a912639488ee08f58a7b292d14d62271bcff9038768f` |
 
-La imagen de **Python** es la excepción, y es deliberada: la versión se elige al construir según la del proyecto (ADR-013, de 3.10 a 3.15), así que no puede fijarse un único digest en el `Dockerfile`. Para mantenerla reproducible, la versión se pasa como argumento de construcción (`PYTHON_VERSION`) y la imagen base se descarga con esa versión exacta; si en el futuro se quiere fijarla por digest, el camino es un digest por versión en el adaptador, no una etiqueta suelta.
+La imagen de **Python** es la excepción, y es deliberada: la versión se elige al construir según la del proyecto (ADR-013, de 3.10 a 3.14), así que no puede fijarse un único digest en el `Dockerfile`. La versión menor se pasa como argumento de construcción (`PYTHON_VERSION`). Su etiqueta permite recibir actualizaciones del parche y de Debian; no garantiza los mismos bytes en reconstrucciones futuras. Para obtener esa garantía haría falta mantener un digest por versión en el adaptador.
 
 Para actualizar un digest: `docker buildx imagetools inspect <imagen>:<etiqueta>` o la API del registro; después se cambia la línea `FROM` del `Dockerfile` correspondiente y `tests/test_ci_pinning.py` avisa si alguna imagen base vuelve a quedar solo por etiqueta.
 
@@ -297,6 +297,43 @@ El botón **Liberar espacio** pide confirmación y lista qué se borra y qué se
 
 Borrar contenido libera espacio *dentro* de Docker, pero `C:` no lo recupera hasta compactar `docker_data.vhdx`: la sección lo explica con los pasos (`wsl --shutdown` y `diskpart` → `select vdisk file=…`, `attach vdisk readonly`, `compact vdisk`, `detach vdisk`).
 
+## Protección de recursos durante la corrida
+
+### Límites de escrituras y reutilización de copias
+
+Además de CPU, memoria, procesos y tiempo, el sandbox limita cada archivo escrito
+a 256 MiB (`ulimit fsize`). Un vigilante comprueba cada 0,1 s el tamaño de la copia
+de trabajo y `/out`: al superar 2 GiB en total o quedar menos de 512 MiB libres en
+el disco host, mata el contenedor y registra un problema de entorno. Es vigilancia
+periódica, por lo que puede haber un exceso transitorio; no es una cuota de sistema
+de archivos. Antes de copiar también se comprueba el presupuesto y la reserva.
+
+Los logs del contenedor rotan en Docker a 2 MB y una sola copia. QAgent los lee en
+streaming con un máximo de 2.000.000 bytes, limita JUnit a 2.000.000 bytes y coverage
+a 10.000.000 bytes; rechaza informes JSON inválidos y enlaces simbólicos en la salida.
+Un corte por disco detiene los siguientes objetivos de la corrida.
+
+`sandbox/copias.py` conserva una instantánea privada durante cada corrida. Las
+ejecuciones usan una copia de trabajo exclusiva y restauran sus cambios antes del
+siguiente test. La instantánea no se monta en el contenedor, el proyecto original
+no se monta y ambas copias se eliminan al cerrar la corrida.
+
+### Clonado y construcción de dependencias
+
+El clonado permite cancelar, admite una sola solicitud activa por ventana y está
+acotado a 600 s y 1 GiB. El plazo se vigila aunque Git no escriba en stderr. Ante
+fallo se elimina solo lo creado para ese clonado; una carpeta destino preexistente
+se conserva. La cancelación detiene también sus procesos hijos y sigue disponible
+si Git ya cerró stderr pero todavía no terminó.
+
+La construcción de imágenes tiene un plazo total de 900 s, incluso con un stream
+silencioso. El error transitorio de exportación `lease does not exist` admite un
+solo reintento dentro de ese mismo plazo. Al vencer se cierra la conexión de Docker; el daemon puede tardar en
+abortar la construcción. Los requirements de Python admiten solo paquetes nombrados
+y ruedas: se rechazan fuentes VCS, URLs directas, rutas locales, editables e índices
+alternativos. Para Java, la fase con red descarga el POM preparado con las mismas
+dependencias de pruebas que usará la fase offline, incluidos Mockito y Vintage.
+
 ## Versiones de Python soportadas en el sandbox (ADR-013)
 
 El sandbox de Docker de QAgent ejecuta pruebas para proyectos en el rango **Python 3.10–3.14** (3.10, 3.11, 3.12, 3.13 y 3.14), con **3.11** como versión por defecto.
@@ -330,11 +367,25 @@ Para ver solo la interfaz, sin Python, abre `src/qagent/frontend/index.html` en 
 
 ## Distribución
 
+El instalador fija las dependencias y sus transitivas en
+`packaging/runtime-windows-py313.lock.txt`; las herramientas de construcción también
+están en `packaging/constraints.txt`. CI usa ambos y `construir_windows.py` comprueba
+las versiones instaladas antes de construir. Se debe usar un entorno virtual limpio
+con Python 3.13.17, la versión del equipo.
+
 | Qué | Cómo |
 |---|---|
 | Probar el paquete instalado, limpio y fuera del repositorio | `python scripts/verificar_paquete.py` |
-| Construir `QAgent.exe` y el instalador de Windows | `pip install -c packaging/constraints.txt -e .[dev,empaquetar]`, instalar Inno Setup 6.6 o superior (`winget install JRSoftware.InnoSetup`) y `python scripts/construir_windows.py` → `dist\windows\` |
+| Construir `QAgent.exe` y el instalador de Windows | En un entorno limpio: `pip install -c packaging/constraints.txt -c packaging/runtime-windows-py313.lock.txt -e ".[dev,empaquetar]"`, instalar Inno Setup 6.6 o superior y `python scripts/construir_windows.py` → `dist\windows\` |
 | Publicar una versión | Ver abajo |
+
+### Actualizar el bloqueo del instalador
+
+En Windows x64 y un entorno vacío de Python 3.13, resolver con
+`python -m pip install --dry-run --ignore-installed --report resolucion.json -c packaging/constraints.txt ".[dev,empaquetar]"`.
+Convertir con `python scripts/actualizar_lock.py resolucion.json` y repetir la
+instalación limpia y el empaquetado antes de aceptar el cambio. El generador conserva
+solo nombres y versiones, sin URLs ni credenciales del reporte de pip.
 
 ### Publicar una versión
 

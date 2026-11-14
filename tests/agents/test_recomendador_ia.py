@@ -491,7 +491,7 @@ def test_la_vista_previa_muestra_origen_ia_y_el_consumo(tmp_path):
         ClienteDePrueba(_json("endpoint", "funcion")), tracker=tracker
     )
 
-    vista = generar_vista_previa(raiz, recomendador=recomendador)
+    vista = generar_vista_previa(raiz, recomendador=recomendador, ia=True)
 
     assert vista["recomendacion"]["origen"] == "ia"
     assert _tipos(vista["recomendacion"]) == ["endpoint", "funcion"]
@@ -522,7 +522,7 @@ def test_la_vista_previa_lee_el_modo_ia_de_config_local(tmp_path, monkeypatch):
     carpeta.mkdir()
     _proyecto(carpeta, {"app.py": MIXTO})
 
-    vista = generar_vista_previa(carpeta)
+    vista = generar_vista_previa(carpeta, ia=True)
 
     assert vista["recomendacion"]["origen"] == "ia"
     assert _tipos(vista["recomendacion"]) == ["endpoint", "funcion", "mutacion"]

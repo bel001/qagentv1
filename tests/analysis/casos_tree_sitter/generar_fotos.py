@@ -11,7 +11,9 @@ Uso: ``python tests/analysis/casos_tree_sitter/generar_fotos.py``
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 AQUI = Path(__file__).resolve().parent
@@ -67,9 +69,16 @@ def _funciones_de_nivel(ruta: Path) -> list[str]:
 
 def fotos() -> dict[str, object]:
     analisis = analizar_proyecto(PROYECTO)
+    # La foto histórica solo contenía banco_mvp.py. Los bancos agregados después
+    # no justifican excluir sus nombres de carpeta en proyectos del usuario.
+    with tempfile.TemporaryDirectory(prefix="qagent-foto-bench-") as carpeta:
+        shutil.copyfile(
+            RAIZ_REPO / "bench" / "banco_mvp.py", Path(carpeta) / "banco_mvp.py"
+        )
+        analisis_bench = analizar_proyecto(carpeta)
     resultado: dict[str, object] = {
         "analisis_proyecto": analisis,
-        "analisis_bench": analizar_proyecto(RAIZ_REPO / "bench"),
+        "analisis_bench": analisis_bench,
     }
 
     contexto: dict[str, object] = {}

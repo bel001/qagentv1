@@ -11,11 +11,13 @@ from __future__ import annotations
 import json
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from qagent import contracts
 from qagent.lenguajes import LanguageAdapter, adaptador_de_contrato
+from qagent.lenguajes.base import Clasificacion
 from qagent.llm import ClienteLLM, TokenTracker
 from qagent.sandbox import (
     LIMITES_POR_DEFECTO,
@@ -163,7 +165,10 @@ class ReviewerAgent:
 
         modulo_cov = self.modulo_cov or adaptador.modulo_cobertura(contrato["modulo"])
         framework = contracts.normalizar_planner(contrato)["framework_pruebas"]
-        comando = adaptador.comando_pruebas(modulo_cov, framework)
+        try:
+            comando = adaptador.comando_pruebas(modulo_cov, framework)
+        except (OSError, UnicodeError, ValueError) as error:
+            return self._error_test(contrato, intento, str(error))
         with tempfile.TemporaryDirectory(prefix="qagent-reviewer-") as temporal:
             ruta_tests = Path(temporal)
             try:
@@ -224,7 +229,16 @@ class ReviewerAgent:
                 resultado.coverage, modulo, rango
             ) or self._extraer_cobertura(resultado.coverage)
 
-        clasificacion = adaptador.clasificar_ejecucion(resultado)
+        clasificacion = adaptador.clasificar_ejecucion(
+            replace(resultado, objetivo=contrato["objetivo"])
+        )
+        if resultado.limite_disco:
+            clasificacion = Clasificacion(
+                "entorno",
+                "El sandbox alcanzó su límite de disco; la prueba no tiene veredicto.",
+                "limite_disco_sandbox",
+                detener_corrida=True,
+            )
         if clasificacion is not None and clasificacion.motivo_sin_veredicto:
             revision = self._resultado(
                 objetivo=contrato["objetivo"],
@@ -238,6 +252,8 @@ class ReviewerAgent:
                 feedback=clasificacion.detalle,
             )
             revision["motivo_sin_veredicto"] = clasificacion.motivo_sin_veredicto
+            if clasificacion.detener_corrida:
+                revision["detener_corrida"] = True
             contracts.validar(contracts.REVIEW_RESULT, revision)
             return revision
 

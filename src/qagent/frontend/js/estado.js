@@ -86,6 +86,7 @@ let eleccionPruebas = {modo:'nuevas', unitarias:false, endpoints:false, integrac
 // issue 275 (ADR-016): contrato inferido para funciones sin docstring. El valor inicial sale de `[inferencia] activa`;
 // la revisión por función (aceptar o descartar antes de generar) empieza apagada.
 let INFERIR_SIN_DOCSTRING = true;
+let LIMITE_INFERENCIA_POR_MODULO = 20;
 let REVISAR_INFERIDOS = false;
 let runEstimate = {tok:0}, projectPath = 'E:\\Proyectos\\ecommerce-core';
 

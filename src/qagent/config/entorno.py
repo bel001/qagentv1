@@ -56,7 +56,7 @@ def estado_git() -> dict[str, str]:
         return {"estado": "no_instalado", "mensaje": MENSAJE_GIT_AUSENTE}
     try:
         resultado = subprocess.run(
-            ["git", "--version"],
+            ["git", "--version"],  # noqa: S607 -- buscar_git comprobó el binario del sistema
             capture_output=True,
             text=True,
             timeout=TIMEOUT_GIT_S,

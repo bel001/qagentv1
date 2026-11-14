@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import threading
 from typing import Any
 
 from qagent import contracts
@@ -171,52 +170,42 @@ class RecomendadorIA:
             f"{json.dumps(entrada, ensure_ascii=False)}"
         )
         respuesta = self._generar(prompt)
-        modelo = respuesta.modelo or self.precio.modelo
-        self.tracker.registrar(
-            agente=AGENTE,
-            modelo=modelo,
-            tokens_entrada=respuesta.tokens_entrada,
-            tokens_salida=respuesta.tokens_salida,
-            costo_usd=self.precio.costo(
-                respuesta.tokens_entrada, respuesta.tokens_salida
-            ),
-            es_simulado=self.es_simulado,
-            es_estimado=respuesta.es_estimado,
-        )
+
         return _recomendacion_ia(respuesta.contenido, proyeccion, reglas)
 
     def _generar(self, prompt: str) -> RespuestaLLM:
-        """Llama al LLM en otro hilo y lo espera a lo sumo ``tiempo_maximo_s``."""
-        salida: dict[str, Any] = {}
+        """Llama con plazo total y contabiliza cada respuesta una sola vez."""
+        from qagent.llm.llamada import generar_acotado
 
-        def llamar() -> None:
-            try:
-                try:
-                    salida["respuesta"] = self.cliente.generar(
-                        prompt,
-                        rol=AGENTE,
-                        timeout_s=self.tiempo_maximo_s,
-                        plazo_total_s=self.tiempo_maximo_s,
-                    )
-                except TypeError:
-                    salida["respuesta"] = self.cliente.generar(prompt, rol=AGENTE)
-            except Exception as error:  # noqa: BLE001 — se informa abajo
-                salida["error"] = error
+        contexto = self.tracker.contexto_actual()
 
-        hilo = threading.Thread(target=llamar, name="recomendador-ia", daemon=True)
-        hilo.start()
-        hilo.join(self.tiempo_maximo_s)
-        if hilo.is_alive():
-            raise SinRecomendacionIA(
-                f"el LLM no respondió en {self.tiempo_maximo_s:g} s (tiempo agotado)"
+        def registrar(respuesta: RespuestaLLM) -> None:
+            self.tracker.fijar_contexto_hilo(*contexto)
+            modelo = respuesta.modelo or self.precio.modelo
+            self.tracker.registrar(
+                agente=AGENTE,
+                modelo=modelo,
+                tokens_entrada=respuesta.tokens_entrada,
+                tokens_salida=respuesta.tokens_salida,
+                costo_usd=self.precio.costo(
+                    respuesta.tokens_entrada, respuesta.tokens_salida
+                ),
+                es_simulado=self.es_simulado,
+                es_estimado=respuesta.es_estimado,
             )
-        if "error" in salida:
-            error = salida["error"]
-            raise SinRecomendacionIA(
-                f"el LLM falló: {type(error).__name__}: "
-                f"{sanitizar_secretos(_recortar(str(error)))}"
+
+        try:
+            return generar_acotado(
+                self.cliente, prompt, AGENTE, self.tiempo_maximo_s, registrar
             )
-        return salida["respuesta"]
+        except TimeoutError as error:
+            raise SinRecomendacionIA(
+                "TimeoutError: " + sanitizar_secretos(_recortar(str(error)))
+            ) from error
+        except Exception as error:
+            raise SinRecomendacionIA(
+                f"el LLM falló: {type(error).__name__}: {sanitizar_secretos(_recortar(str(error)))}"
+            ) from error
 
 
 def _recomendacion_ia(

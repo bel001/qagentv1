@@ -1,7 +1,8 @@
 // utils.js — utilidades compartidas por todos los componentes
 const $ = id => document.getElementById(id);
 const escHtml = t => String(t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const escJs = t => String(t).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+// Literal JavaScript dentro de un atributo HTML: se protegen ambos contextos.
+const escJs = t => escHtml(String(t).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r'));
 
 // Avisos emergentes (usan #toast de index.html)
 function toast(html, icono = I('checkc','var(--exito-t)',16), ms = 5200){ const t = $('toast'); t.innerHTML = icono + '<span>' + html + '</span>'; t.classList.add('show'); clearTimeout(t._h); t._h = setTimeout(()=>t.classList.remove('show'), ms); }

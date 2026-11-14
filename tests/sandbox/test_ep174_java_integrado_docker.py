@@ -15,12 +15,7 @@ from qagent.config import cargar_configuracion
 from qagent.llm import FakeLLMClient, RespuestaLLM
 from qagent.orchestrator.corrida import FIN, ejecutar_corrida
 from qagent.orchestrator.regresion import ejecutar_regresion
-from qagent.sandbox.imagen import (
-    _buscar_dependencias,
-    _imagen_existe,
-    etiqueta_para_dependencias,
-    receta_de,
-)
+from qagent.sandbox.imagen import preparar_imagen
 from qagent.sandbox.modelos import IMAGEN_JAVA
 from qagent.storage.vista_reporte import vista_reporte
 from tests.agents.java_controlado import CASOS, RAIZ, ClienteJavaGrabado
@@ -63,13 +58,7 @@ def test_banco_original_desde_escritorio_hasta_resultados_y_regresion(
     cliente_docker, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Conserva el POM original, detecta tres defectos y repite las pruebas aprobadas."""
-    receta = receta_de(IMAGEN_JAVA)
-    _, dependencias = _buscar_dependencias(BANCO, receta)
-    imagen = etiqueta_para_dependencias(receta.prefijo, dependencias)
-    if not _imagen_existe(cliente_docker, imagen):
-        pytest.skip(
-            "Prepara la imagen derivada de bench_java; la prueba ejecuta sin descargas."
-        )
+    preparar_imagen(BANCO, cliente=cliente_docker, imagen=IMAGEN_JAVA)
     proyecto = tmp_path / "banco-original"
     shutil.copytree(BANCO, proyecto, ignore=shutil.ignore_patterns("target", ".qagent"))
     originales = {

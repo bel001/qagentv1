@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 
 from qagent.lenguajes.javascript_estructura import exportadas, gramatica_de
 from qagent.lenguajes.treesitter import obtener_parser
+from qagent.sandbox.archivos_prueba import ruta_de_prueba
 from qagent.sandbox.stryker_comando import CONFIG_STRYKER_TEMPORAL
 
 CARPETA_PRUEBAS_STRYKER = "_qagent_mutacion"
@@ -102,7 +103,7 @@ def preparar_pruebas_stryker(copia: Path, pruebas: Path, modulo: str) -> None:
     Ajusta las rutas de importación `../proyecto/` para que apunten a `../`
     respecto a la carpeta interna de pruebas, evitando un 100 % falso.
     """
-    destino_carpeta = copia / CARPETA_PRUEBAS_STRYKER
+    destino_carpeta = ruta_de_prueba(copia, CARPETA_PRUEBAS_STRYKER)
     destino_carpeta.mkdir(parents=True, exist_ok=True)
 
     ruta_mod = PurePosixPath(modulo.replace("\\", "/"))
@@ -129,7 +130,7 @@ def preparar_pruebas_stryker(copia: Path, pruebas: Path, modulo: str) -> None:
         contenido_ajustado = contenido.replace("../proyecto/", "../")
 
         nombre_destino = f"{archivo.stem}{ext}"
-        (destino_carpeta / nombre_destino).write_text(
+        ruta_de_prueba(destino_carpeta, nombre_destino).write_text(
             contenido_ajustado, encoding="utf-8"
         )
 
@@ -161,6 +162,10 @@ def escribir_config_stryker(
     }
 
     archivo_config = copia / CONFIG_STRYKER_TEMPORAL
+    if archivo_config.exists() or archivo_config.is_symlink():
+        raise ValueError(
+            "La copia ya contiene la configuración reservada de QAgent Stryker."
+        )
     archivo_config.write_text(json.dumps(configuracion, indent=2), encoding="utf-8")
     return archivo_config
 
