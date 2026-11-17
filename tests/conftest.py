@@ -113,6 +113,21 @@ def pytest_terminal_summary(terminalreporter, config: pytest.Config) -> None:
 
 
 @pytest.fixture(autouse=True)
+def sesion_docker_solo_en_pruebas_docker(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`QAGENT_TEST_SESSION` solo la ven las pruebas `docker`.
+
+    Con `--docker` la sesión se fija para todo el proceso, para etiquetar las imágenes
+    que crean las pruebas y borrar solo esas (#250). Las pruebas sin Docker simulan la
+    construcción y comparan sus etiquetas exactas: con la variable presente fallaban
+    solo al correr con `--docker`.
+    """
+    if request.node.get_closest_marker("docker") is None:
+        monkeypatch.delenv("QAGENT_TEST_SESSION", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def imagenes_base_al_dia(request: pytest.FixtureRequest) -> None:
     """Antes de la primera prueba `docker`, reconstruye las imágenes base viejas (#250).
 
