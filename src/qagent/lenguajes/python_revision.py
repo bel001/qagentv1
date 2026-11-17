@@ -32,18 +32,48 @@ def _funcion_llamada(contrato: dict[str, Any]) -> str:
     return str(contrato["objetivo"])
 
 
+def _argumentos_literales(entrada: Any) -> str:
+    if isinstance(entrada, dict):
+        return ", ".join(f"{nombre}={valor!r}" for nombre, valor in entrada.items())
+    if isinstance(entrada, list):
+        return ", ".join(repr(valor) for valor in entrada)
+    return ""
+
+
 def _llamada_del_caso(contrato: dict[str, Any], caso: dict[str, Any]) -> str:
     """La llamada que demuestra el caso, con sus entradas literales (para el feedback)."""
-    entrada = caso.get("entrada")
-    if isinstance(entrada, dict):
-        argumentos = ", ".join(
-            f"{nombre}={valor!r}" for nombre, valor in entrada.items()
-        )
-    elif isinstance(entrada, list):
-        argumentos = ", ".join(repr(valor) for valor in entrada)
-    else:
-        argumentos = ""
+    argumentos = _argumentos_literales(caso.get("entrada"))
+    metodo = contrato.get("metodo") or {}
+    if metodo.get("tipo") == "instancia":
+        clase, nombre = str(contrato["objetivo"]).split(".", 1)
+        constructor = _argumentos_literales(caso.get("constructor"))
+        return f"{clase}({constructor}).{nombre}({argumentos})"
     return f"{_funcion_llamada(contrato)}({argumentos})"
+
+
+def _es_construccion(nodo: ast.AST, clase: str) -> bool:
+    """``Clase(...)``."""
+    return (
+        isinstance(nodo, ast.Call)
+        and isinstance(nodo.func, ast.Name)
+        and nodo.func.id == clase
+    )
+
+
+def _instancias_de(arbol: ast.AST, clase: str) -> frozenset[str]:
+    """Variables asignadas desde ``Clase(...)`` en el test (ADR-017)."""
+    nombres: set[str] = set()
+    for nodo in ast.walk(arbol):
+        if isinstance(nodo, ast.Assign) and _es_construccion(nodo.value, clase):
+            nombres.update(d.id for d in nodo.targets if isinstance(d, ast.Name))
+        elif (
+            isinstance(nodo, ast.AnnAssign)
+            and nodo.value is not None
+            and _es_construccion(nodo.value, clase)
+            and isinstance(nodo.target, ast.Name)
+        ):
+            nombres.add(nodo.target.id)
+    return frozenset(nombres)
 
 
 _PATRONES_ERROR_TEST = (
@@ -215,12 +245,17 @@ class ReglasRevisionPython:
         """
         valores: list[Any] = []
         variables_resultado: set[str] = set()
+        instancias = (
+            _instancias_de(arbol, objetivo.split(".", 1)[0])
+            if objetivo is not None and "." in objetivo
+            else frozenset()
+        )
         if objetivo is not None:
             for nodo in ast.walk(arbol):
                 if isinstance(nodo, (ast.Assign, ast.AnnAssign)):
                     valor = nodo.value
                     if not ReglasRevisionPython.es_resultado_objetivo(
-                        valor, objetivo, variables_resultado
+                        valor, objetivo, variables_resultado, instancias
                     ):
                         continue
                     destinos = (
@@ -246,11 +281,11 @@ class ReglasRevisionPython:
                     continue
                 derecha = prueba.comparators[0]
                 if ReglasRevisionPython.es_resultado_objetivo(
-                    prueba.left, objetivo, variables_resultado
+                    prueba.left, objetivo, variables_resultado, instancias
                 ):
                     candidatos = [derecha]
                 elif ReglasRevisionPython.es_resultado_objetivo(
-                    derecha, objetivo, variables_resultado
+                    derecha, objetivo, variables_resultado, instancias
                 ):
                     candidatos = [prueba.left]
                 else:
@@ -265,14 +300,30 @@ class ReglasRevisionPython:
 
     @staticmethod
     def es_resultado_objetivo(
-        nodo: ast.AST | None, objetivo: str, variables: set[str]
+        nodo: ast.AST | None,
+        objetivo: str,
+        variables: set[str],
+        instancias: frozenset[str] = frozenset(),
     ) -> bool:
-        """Si el nodo representa el resultado completo de la función objetivo."""
+        """Si el nodo representa el resultado completo de la función objetivo.
+
+        Para un método ``Clase.metodo`` (ADR-017) vale la llamada sobre la clase
+        (estáticos y de clase), sobre ``Clase(...)`` o sobre una variable asignada
+        desde ``Clase(...)`` (``instancias``).
+        """
         if isinstance(nodo, ast.Name):
             return nodo.id in variables
         if not isinstance(nodo, ast.Call):
             return False
         funcion = nodo.func
+        if "." in objetivo:
+            clase, metodo = objetivo.split(".", 1)
+            if not isinstance(funcion, ast.Attribute) or funcion.attr != metodo:
+                return False
+            receptor = funcion.value
+            if isinstance(receptor, ast.Name):
+                return receptor.id == clase or receptor.id in instancias
+            return _es_construccion(receptor, clase)
         if isinstance(funcion, ast.Name):
             return funcion.id == objetivo
         return isinstance(funcion, ast.Attribute) and funcion.attr == objetivo
@@ -450,7 +501,10 @@ class ReglasRevisionPython:
     def rango_de_objetivo(
         raiz: Path, modulo: str, nombre: str
     ) -> tuple[int, int] | None:
-        """Primera y última línea del cuerpo de una función de nivel superior."""
+        """Primera y última línea del cuerpo de una función de nivel superior.
+
+        ``Clase.metodo`` (ADR-017) ubica el método dentro de su clase.
+        """
         try:
             fuente = (raiz / modulo).read_text(encoding="utf-8")
             from qagent.analysis import arbol_ts
@@ -458,6 +512,17 @@ class ReglasRevisionPython:
             arbol = arbol_ts.parsear(fuente)
         except (OSError, ValueError):
             return None
+        if "." in nombre:
+            from qagent.analysis.metodos_python import nodo_de_metodo
+
+            encontrado = nodo_de_metodo(arbol, nombre)
+            if encontrado is None:
+                return None
+            metodo = arbol_ts.definicion(encontrado[1])
+            cuerpo = metodo.child_by_field_name("body")
+            if cuerpo is None or not cuerpo.children:
+                return None
+            return cuerpo.children[0].start_point.row + 1, metodo.end_point.row + 1
         for nodo in arbol.root_node.children:
             funcion = nodo
             if nodo.type == "decorated_definition":

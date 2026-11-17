@@ -498,11 +498,20 @@ class PlannerAgent:
             "objetivo": nombre,
             "firma": funcion.get("firma") or "()",
             # HU-06: la marca Profundizar de la vista previa (filtrar_modulos);
-            # nunca la decide el modelo.
-            "critical": bool(funcion.get("critical", False)),
+            # nunca la decide el modelo. Los métodos aún no se mutan (ADR-017).
+            "critical": bool(funcion.get("critical", False))
+            and not funcion.get("tipo_metodo"),
             "llama_a": list(dict.fromkeys(funcion.get("llama_a") or [])),
             "casos": casos,
         }
+        if funcion.get("tipo_metodo"):
+            contrato["metodo"] = {
+                "clase": funcion["clase"],
+                "tipo": funcion["tipo_metodo"],
+            }
+            constructor = (funcion.get("constructor") or {}).get("firma")
+            if funcion["tipo_metodo"] == "instancia" and constructor:
+                contrato["metodo"]["constructor"] = constructor
         try:
             contracts.validar(contracts.PLANNER_V3, contrato)
         except ContratoInvalido as error:
@@ -535,6 +544,7 @@ class PlannerAgent:
             if nombre in funciones
             and not funciones[nombre].get("docstring")
             and not funciones[nombre].get("solo_integracion")
+            and not funciones[nombre].get("tipo_metodo")  # ADR-017: aún no
         ]
         contextos: dict[str, Any] = {}
         for nombre in pendientes:

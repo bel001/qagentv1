@@ -75,7 +75,9 @@ def _agregar_integraciones(
                 {
                     **m,
                     "funciones": [
-                        f for f in m.get("funciones", []) if not f.get("no_soportada")
+                        f
+                        for f in m.get("funciones", [])
+                        if not f.get("no_soportada") and not f.get("tipo_metodo")
                     ],
                 }
                 for m in estructura["modulos"]
@@ -159,7 +161,11 @@ class PythonAdapter(LanguageAdapter):
         además ``integraciones`` (#245, ADR-014): las cadenas candidatas a una prueba
         de integración interna. Sin candidatas, la clave no aparece.
         """
-        estructura: Estructura = {"lenguaje": self.lenguaje, **analizar_proyecto(raiz)}
+        # Backlog 11 (ADR-017): también los métodos públicos de las clases.
+        estructura: Estructura = {
+            "lenguaje": self.lenguaje,
+            **analizar_proyecto(raiz, metodos=True),
+        }
         _agregar_integraciones(estructura, raiz)
         return estructura
 
@@ -256,7 +262,7 @@ class PythonAdapter(LanguageAdapter):
 
     def huellas_de_archivo(self, fuente: str, relativa: str) -> dict[str, str] | None:
         """Huella tree-sitter de cada función pública y ruta FastAPI (HU-24, HU-25)."""
-        return python_regresion.huellas_de_archivo(fuente, relativa)
+        return python_regresion.huellas_de_archivo(fuente, relativa, metodos=True)
 
     def funciones_de_modulo(self, raiz: Path, modulo: str) -> list[dict[str, Any]]:
         """Línea del `def` de cada función de primer nivel (mutación de reg_deep)."""

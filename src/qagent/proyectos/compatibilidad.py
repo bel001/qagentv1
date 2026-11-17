@@ -59,6 +59,10 @@ MOTIVO_SIN_DOC = {
         "Documenta qué devuelve con @returns o un @example."
     ),
 }
+MOTIVO_METODO_SIN_DOC = (
+    "Método sin docstring: los métodos todavía no se infieren (ADR-017). Documenta "
+    "qué devuelve o qué excepción lanza."
+)
 MOTIVO_LIMITE_INFERENCIA = (
     "Sin docstring y el módulo supera el máximo de {limite} funciones que se infieren "
     "por módulo: agrega un docstring o elige menos funciones sin documentar."
@@ -98,6 +102,8 @@ def compatibilidad_funcion(
     if funcion.get("docstring"):
         return _estado(COMPATIBLE, MOTIVO_COMPATIBLE)
     familia = _familia(adaptador.lenguaje)
+    if funcion.get("tipo_metodo"):
+        return _estado(REQUIERE_CONFIGURACION, MOTIVO_METODO_SIN_DOC)
     if familia == "python" and inferencia_activa:
         if dentro_del_limite:
             return _estado(COMPATIBLE, MOTIVO_INFERIDO)

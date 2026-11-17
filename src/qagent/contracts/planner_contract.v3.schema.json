@@ -77,6 +77,17 @@
       "uniqueItems": true,
       "description": "Solo en `integracion` (#245): módulos de efecto (red, archivos, hora, azar…) que usa la raíz y que el test debe simular. Las funciones internas de efecto van en `llama_a`."
     },
+    "metodo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clase", "tipo"],
+      "description": "Backlog 11 (ADR-017): el objetivo Python es un método `Clase.metodo`. `tipo` dice cómo se llama; con `instancia`, cada caso lleva `constructor` y aquí va la firma del constructor.",
+      "properties": {
+        "clase": { "$ref": "#/$defs/identificador_python" },
+        "tipo": { "enum": ["instancia", "estatico", "clase"] },
+        "constructor": { "type": "string", "minLength": 1 }
+      }
+    },
     "casos": {
       "type": "array",
       "minItems": 1,
@@ -121,7 +132,19 @@
         "required": ["tipo", "lenguaje"],
         "properties": { "tipo": { "const": "funcion" }, "lenguaje": { "const": "python" } }
       },
-      "then": { "properties": { "objetivo": { "$ref": "#/$defs/identificador_python" } } }
+      "then": { "properties": { "objetivo": { "$ref": "#/$defs/objetivo_python" } } }
+    },
+    {
+      "description": "ADR-017: un objetivo Python con punto es un método y debe declarar `metodo` (clase y cómo se llama). Sin eso, un nombre calificado no es válido.",
+      "if": {
+        "required": ["tipo", "lenguaje", "objetivo"],
+        "properties": {
+          "tipo": { "const": "funcion" },
+          "lenguaje": { "const": "python" },
+          "objetivo": { "pattern": "\\." }
+        }
+      },
+      "then": { "required": ["metodo"] }
     },
     {
       "if": {
@@ -188,6 +211,11 @@
     "identificador_python": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "objetivo_python": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?$",
+      "description": "Función de nivel superior (`calcular`) o método de una clase de nivel superior (`Carrito.total`, ADR-017)."
     },
     "objetivo_metodo": {
       "type": "string",
@@ -377,7 +405,11 @@
           "items": { "type": "string", "minLength": 1 },
           "description": "Solo con origen `inferido`: fuentes estáticas que respaldan el caso (`cuerpo`, `dependencia:<símbolo>`, `llamador:<ruta>::<función>`, `test_existente:<ruta>::<test>`)."
         },
-        "categoria": { "enum": ["normal", "limite", "error"] }
+        "categoria": { "enum": ["normal", "limite", "error"] },
+        "constructor": {
+          "type": "object",
+          "description": "Solo en métodos de instancia (ADR-017): argumentos por nombre con que se construye la clase. Salen de la firma y la documentación del constructor, igual que `entrada`."
+        }
       }
     }
   }

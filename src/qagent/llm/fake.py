@@ -269,9 +269,20 @@ def generar_test_desde_contrato(contrato: dict[str, Any]) -> str:
         if contrato.get("tipo") == "integracion"
         else contrato["objetivo"]
     )
-    lineas = ["import pytest", "", f"from {modulo} import {objetivo}", ""]
+    metodo = (
+        contrato.get("metodo") if isinstance(contrato.get("metodo"), dict) else None
+    )
+    importado = metodo["clase"] if metodo else objetivo
+    lineas = ["import pytest", "", f"from {modulo} import {importado}", ""]
     for caso in contrato.get("casos", []):
         llamada = f"{objetivo}({_argumentos(caso.get('entrada'))})"
+        if metodo and metodo.get("tipo") == "instancia":
+            # ADR-017: el objeto se construye con el constructor del caso.
+            clase, nombre = objetivo.split(".", 1)
+            llamada = (
+                f"{clase}({_argumentos(caso.get('constructor'))})"
+                f".{nombre}({_argumentos(caso.get('entrada'))})"
+            )
         lineas += ["", f"def test_{caso['id']}():"]
         if "excepcion" in caso:
             lineas += [

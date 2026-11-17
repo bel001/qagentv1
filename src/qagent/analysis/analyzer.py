@@ -11,7 +11,8 @@ Qué analiza:
     * Módulos ``.py`` del proyecto, con rutas relativas en formato POSIX.
     * Funciones públicas definidas a nivel de módulo (``def`` y ``async def``).
       Las funciones privadas (prefijo ``_``) se ignoran. Los métodos de clases
-      y las funciones anidadas quedan fuera de este alcance.
+      se agregan con ``metodos=True`` (ADR-017, ver :mod:`metodos_python`); las
+      funciones anidadas quedan fuera de este alcance.
 
     * Endpoints FastAPI, modelos Pydantic y el mapa de llamadas ``llama_a``
       (EN-14, en :mod:`qagent.analysis.rutas`). Las funciones que atienden una
@@ -234,7 +235,9 @@ def _resumen(
     }
 
 
-def analizar_proyecto(raiz: str | os.PathLike[str]) -> dict[str, Any]:
+def analizar_proyecto(
+    raiz: str | os.PathLike[str], *, metodos: bool = False
+) -> dict[str, Any]:
     """Analiza estáticamente todos los módulos Python bajo ``raiz``.
 
     Devuelve un diccionario serializable a JSON con tres claves:
@@ -249,6 +252,11 @@ def analizar_proyecto(raiz: str | os.PathLike[str]) -> dict[str, Any]:
     * ``resumen``: totales de módulos, funciones públicas, endpoints y errores, más las
       inconsistencias (sin docstring, sin tipos, con alguna de las dos) con su
       porcentaje sobre el total de funciones públicas.
+
+    Con ``metodos=True`` (backlog 11, ADR-017) cada módulo suma a ``funciones`` los
+    métodos públicos de sus clases (``Clase.metodo``) y lista en
+    ``metodos_no_seleccionables`` los que no se ofrecen, con su motivo. Por defecto
+    no: la salida de EN-02 queda igual que la del analizador anterior (TA-16).
 
     Raises:
         NotADirectoryError: si ``raiz`` no es una carpeta existente.
@@ -268,6 +276,16 @@ def analizar_proyecto(raiz: str | os.PathLike[str]) -> dict[str, Any]:
         except _ERRORES_LECTURA as causa:
             errores.append(_error(relativa, causa))
     _agregar_rutas(modulos, arboles)
+    if metodos:
+        from qagent.analysis.metodos_python import metodos_publicos
+
+        for modulo in modulos:
+            ofrecidos, fuera = metodos_publicos(arboles[modulo["ruta"]])
+            modulo["funciones"].extend(
+                {**metodo, "llama_a": []} for metodo in ofrecidos
+            )
+            if fuera:
+                modulo["metodos_no_seleccionables"] = fuera
     # Un paquete local con ese nombre hace ambiguo el import absoluto: no se excluye.
     if not any(
         (carpeta / prefijo / nombre).exists()

@@ -277,3 +277,40 @@ def test_el_flujo_de_python_sigue_usando_v2() -> None:
     """Las specs guardadas y el Planner validan con v2; EN-17 no las migra."""
     assert contracts.PLANNER == "planner_contract.v2"
     assert contracts.GENERATED_TEST == "generated_test"
+
+
+def test_metodo_python_v3_con_su_clase_y_constructor() -> None:
+    """ADR-017: `Clase.metodo` vale si el contrato declara el método."""
+    dato = ejemplo("planner_contract.v3")
+    dato["objetivo"] = "Precios.calcular_descuento"
+    dato["metodo"] = {
+        "clase": "Precios",
+        "tipo": "instancia",
+        "constructor": "Precios(iva: float = 0.18)",
+    }
+    for caso in dato["casos"]:
+        caso["constructor"] = {"iva": 0.18}
+    assert es_valido(PLANNER_V3, dato)
+
+
+@pytest.mark.parametrize(
+    "metodo",
+    [
+        {"clase": "Precios"},
+        {"clase": "Precios", "tipo": "propiedad"},
+        {"clase": "precios.Precios", "tipo": "estatico"},
+        {"clase": "Precios", "tipo": "estatico", "otro": 1},
+    ],
+)
+def test_metodo_python_v3_mal_declarado_no_es_valido(metodo) -> None:
+    dato = ejemplo("planner_contract.v3")
+    dato["objetivo"] = "Precios.calcular_descuento"
+    dato["metodo"] = metodo
+    assert not es_valido(PLANNER_V3, dato)
+
+
+def test_metodo_python_v3_no_admite_dos_niveles() -> None:
+    dato = ejemplo("planner_contract.v3")
+    dato["objetivo"] = "modulo.Precios.calcular"
+    dato["metodo"] = {"clase": "Precios", "tipo": "estatico"}
+    assert not es_valido(PLANNER_V3, dato)

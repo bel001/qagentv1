@@ -54,25 +54,39 @@ def test_orientacion_explica_riesgos_sin_ejecutar_el_proyecto(
         assert not funcion.get("no_soportada")  # Es seleccionable, no se bloquea.
 
 
-def test_explica_que_la_logica_puede_estar_en_metodos_no_seleccionables(tmp_path):
+def test_la_logica_de_los_metodos_es_seleccionable(tmp_path):
+    """ADR-017: el método con la lógica es un objetivo; lo que no se ofrece se explica."""
+    lineas = [
+        "class FileValidationService:",
+        "    def validar(self, size): return size < 100",
+        "    def _interno(self): return 0",
+        "    @property",
+        "    def limite(self): return 100",
+        "def get_file_validation_service() -> FileValidationService:",
+        "    return FileValidationService()",
+    ]
     (tmp_path / "file_validation.py").write_text(
-        "class FileValidationService:\n"
-        "    def validar(self, size): return size < 100\n"
-        "    def _interno(self): return 0\n"
-        "def get_file_validation_service() -> FileValidationService:\n"
-        "    return FileValidationService()\n",
-        encoding="utf-8",
+        "\n".join(lineas) + "\n", encoding="utf-8"
     )
     vista = vista_previa.generar_vista_previa(tmp_path)
-    [fabrica] = vista["modulos"][0]["funciones"]
-    assert fabrica["orientacion_prueba"]["categoria"] == "revisar"
+    funciones = {f["nombre"]: f for f in vista["modulos"][0]["funciones"]}
+    assert set(funciones) == {
+        "get_file_validation_service",
+        "FileValidationService.validar",
+    }
+    assert (
+        funciones["get_file_validation_service"]["orientacion_prueba"]["categoria"]
+        == "revisar"
+    )
+    assert not funciones["FileValidationService.validar"].get("no_soportada")
     [metodo] = vista["orientacion_pruebas"]["metodos_no_seleccionables"]
     assert metodo["modulo"] == "file_validation.py"
     assert metodo["clase"] == "FileValidationService"
-    assert metodo["nombre"] == "validar"
+    assert metodo["nombre"] == "limite"
+    assert "propiedad" in metodo["motivo"]
     assert vista["orientacion_pruebas"]["resumen"] == {
         "recomendada": 0,
-        "revisar": 1,
+        "revisar": 2,
         "no_soportada": 0,
     }
 

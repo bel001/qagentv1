@@ -55,7 +55,7 @@ def _contexto_dependencias(contrato: dict[str, Any], ruta_proyecto: Path | None)
         nombre_simbolo = (
             contrato.get("manejador")
             if contrato.get("tipo") == "endpoint" and contrato.get("manejador")
-            else funcion_probada(contrato)
+            else nombre_importado(contrato)
         )
         grafo = construir_grafo_dependencias(
             ruta_proyecto,
@@ -80,10 +80,19 @@ def _contexto(
 
 
 def funcion_probada(contrato: dict[str, Any]) -> str:
-    """Función que importa y llama el test: el objetivo, o la raíz de una integración."""
+    """Función que llama el test: el objetivo (``Clase.metodo`` en un método), o la
+    raíz de una integración."""
     if contrato.get("tipo") == "integracion":
         return str(contrato["cadena"][0])
     return str(contrato["objetivo"])
+
+
+def nombre_importado(contrato: dict[str, Any]) -> str:
+    """Lo que el test importa del módulo: la función, o la clase de un método."""
+    metodo = contrato.get("metodo")
+    if isinstance(metodo, dict) and metodo.get("clase"):
+        return str(metodo["clase"])
+    return funcion_probada(contrato)
 
 
 def crear_prompt(
@@ -101,6 +110,10 @@ def crear_prompt(
     regla_simulacion = "- Simula con mocks las funciones incluidas en llama_a."
     if contrato.get("tipo") == "endpoint":
         reglas_objetivo = _reglas_endpoint(contrato)
+    elif isinstance(contrato.get("metodo"), dict):
+        reglas_objetivo = _reglas_metodo(contrato)
+        if contexto is not None:
+            reglas_objetivo += "\n" + _reglas_contexto(contrato)
     elif contrato.get("tipo") == "integracion":
         reglas_objetivo = _reglas_integracion(contrato)
         regla_simulacion = (
@@ -143,6 +156,35 @@ FEEDBACK DEL INTENTO ANTERIOR:
 {_texto_contexto(contexto)}
 {texto_dependencias}
 {MARCA_CONTRATO} {contrato_json}
+""".strip()
+
+
+def _reglas_metodo(contrato: dict[str, Any]) -> str:
+    """Reglas de una prueba de un método de clase (ADR-017)."""
+    metodo = contrato["metodo"]
+    clase = metodo["clase"]
+    nombre = str(contrato["objetivo"]).split(".", 1)[1]
+    importacion = f"from {modulo_importable(contrato['modulo'])} import {clase}"
+    if metodo["tipo"] == "instancia":
+        constructor = metodo.get("constructor") or f"{clase}()"
+        llamada = "\n".join(
+            [
+                (
+                    '- En cada test construye el objeto con el "constructor" del caso, '
+                    "por nombre:"
+                ),
+                f"  objeto = {clase}(**constructor), y llama objeto.{nombre}(**entrada).",
+                f"  Constructor declarado: {constructor}",
+            ]
+        )
+    else:
+        llamada = f"- Llama directamente {clase}.{nombre}(**entrada), sin construir el objeto."
+    return f"""
+- Importa la clase exactamente así: {importacion}
+{llamada}
+- Para un caso con "excepcion" usa with pytest.raises(<Excepcion>) solo alrededor de
+  la llamada al método, no de la construcción del objeto.
+- El valor esperado sale del contrato, nunca del código del método ni de la clase.
 """.strip()
 
 

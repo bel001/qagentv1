@@ -200,18 +200,21 @@ def anotar_aptitud(modulo: dict[str, Any], arbol: Tree) -> None:
             ),
         }
 
-    metodos = []
+    # Backlog 11: los métodos que ya son objetivos no se listan como no seleccionables.
+    ofrecidos = {f["nombre"] for f in modulo.get("funciones", [])}
+    metodos = list(modulo.get("metodos_no_seleccionables") or [])
+    listados = {(m["clase"], m["nombre"]) for m in metodos}
     for nodo in nodos:
         if not ts.es_clase(nodo):
             continue
         for miembro in ts.sentencias(ts.cuerpo(nodo)):
-            if ts.es_funcion(miembro) and not ts.nombre(miembro).startswith("_"):
-                metodos.append(
-                    {
-                        "clase": ts.nombre(nodo),
-                        "nombre": ts.nombre(miembro),
-                        "linea": ts.linea(miembro),
-                    }
-                )
+            if not ts.es_funcion(miembro) or ts.nombre(miembro).startswith("_"):
+                continue
+            clave = (ts.nombre(nodo), ts.nombre(miembro))
+            if f"{clave[0]}.{clave[1]}" in ofrecidos or clave in listados:
+                continue
+            metodos.append(
+                {"clase": clave[0], "nombre": clave[1], "linea": ts.linea(miembro)}
+            )
     if metodos:
         modulo["metodos_no_seleccionables"] = metodos

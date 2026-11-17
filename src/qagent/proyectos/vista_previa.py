@@ -289,8 +289,14 @@ def generar_vista_previa(
                     ),
                     # Se puede inferir (Python sin docstring); que se haga lo decide la
                     # casilla de Preparar, con `inferencia_activa` como valor inicial.
-                    "inferible": doc is None and es_python and not no_soportada,
-                    "critica_propuesta": f.get("ramas", 0) > 0 and not no_soportada,
+                    # ADR-017: los métodos todavía no se infieren ni se mutan.
+                    "inferible": doc is None
+                    and es_python
+                    and not no_soportada
+                    and not f.get("tipo_metodo"),
+                    "critica_propuesta": f.get("ramas", 0) > 0
+                    and not no_soportada
+                    and not f.get("tipo_metodo"),
                 }
             )
         # #74: un endpoint con decisiones en su manejador se propone para profundizar,

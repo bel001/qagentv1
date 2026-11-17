@@ -146,16 +146,20 @@ def _analizar_entrada(
     if incompleto := aviso_recorrido_incompleto(ruta):
         avisar(incompleto, "aviso")
     tipos = list(tipos)
+    # ADR-017: los métodos de clases van con las funciones, pero se nombran aparte.
+    n_metodos = sum(1 for m in modulos for f in m["funciones"] if f.get("tipo_metodo"))
+    n_sueltas = n_funciones - n_metodos
+    texto_metodos = f", y {n_metodos} método(s) de clases" if n_metodos else ""
     if n_endpoints:
         tipos = ["funcion", "endpoint"] if n_funciones else ["endpoint"]
         avisar(
-            f"Análisis estático: {len(modulos)} módulo(s) con {n_funciones} "
-            f"función(es) pública(s) y {n_endpoints} endpoint(s)"
+            f"Análisis estático: {len(modulos)} módulo(s) con {n_sueltas} "
+            f"función(es) pública(s) y {n_endpoints} endpoint(s){texto_metodos}"
         )
     else:
         avisar(
             f"Análisis estático: {len(modulos)} módulo(s) con "
-            f"{n_funciones} función(es) pública(s)"
+            f"{n_sueltas} función(es) pública(s){texto_metodos}"
         )
     if n_integraciones:
         tipos = [*tipos, "integracion"]

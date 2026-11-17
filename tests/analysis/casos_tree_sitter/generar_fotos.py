@@ -11,6 +11,7 @@ Uso: ``python tests/analysis/casos_tree_sitter/generar_fotos.py``
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -148,8 +149,12 @@ def fotos() -> dict[str, object]:
             ]
         ],
     }
+    # La foto es la equivalencia con el analizador anterior (`ast`): funciones y
+    # rutas. Los métodos `Clase.metodo` son nuevos (ADR-017) y tienen sus pruebas.
     resultado["objetivos_huella"] = sorted(
-        f"{m}::{o}" for m, o in regresion.huellas_de_objetivos(PROYECTO)
+        f"{m}::{o}"
+        for m, o in regresion.huellas_de_objetivos(PROYECTO)
+        if not re.fullmatch(r"[A-Za-z_]\w*\.[A-Za-z_]\w*", o)
     )
     return resultado
 
