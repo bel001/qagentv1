@@ -29,6 +29,9 @@ NO_SOPORTADO = "no_soportado"
 ESTADOS = (COMPATIBLE, REQUIERE_CONFIGURACION, NO_SOPORTADO)
 #: Requisito informativo del proyecto: no impide ni condiciona la corrida.
 AVISO = "aviso"
+#: Archivo sin funciones, métodos ni endpoints (un `__init__.py` vacío): no hay
+#: nada que probar, que no es lo mismo que no estar soportado.
+SIN_OBJETIVOS = "sin_objetivos"
 
 #: Estados de la preparación del entorno aislado.
 PREPARACION_VALIDADA = "validada"
@@ -77,8 +80,17 @@ MOTIVO_RUTA = (
 )
 
 
+def _frase(texto: str) -> str:
+    """El motivo como frase: mayúscula inicial y punto final (vienen de varios módulos)."""
+    texto = (texto or "").strip()
+    if not texto:
+        return texto
+    texto = texto[0].upper() + texto[1:]
+    return texto if texto.endswith((".", "?", "!")) else texto + "."
+
+
 def _estado(estado: str, motivo: str) -> dict[str, str]:
-    return {"estado": estado, "motivo": motivo}
+    return {"estado": estado, "motivo": _frase(motivo)}
 
 
 def _familia(lenguaje: str) -> str:
@@ -177,8 +189,10 @@ def anotar_modulo(
         {
             "objetivo": f"{m.get('clase')}.{m.get('nombre')}",
             "linea": m.get("linea"),
-            "motivo": m.get("motivo")
-            or "Método dentro de una clase: todavía no se puede seleccionar.",
+            "motivo": _frase(
+                m.get("motivo")
+                or "Método dentro de una clase: todavía no se puede seleccionar."
+            ),
         }
         for m in modulo.get("metodos_no_seleccionables", [])
     ] + [
@@ -195,6 +209,10 @@ def anotar_modulo(
 
 def _resumen_de(conteo: dict[str, int]) -> dict[str, str]:
     """Estado del módulo: compatible si algo se puede probar tal como está."""
+    if not any(conteo.values()):
+        return _estado(
+            SIN_OBJETIVOS, "No tiene funciones, métodos ni endpoints que probar."
+        )
     if conteo[COMPATIBLE]:
         motivo = f"{conteo[COMPATIBLE]} objetivo(s) se pueden probar tal como están."
         return _estado(COMPATIBLE, motivo)

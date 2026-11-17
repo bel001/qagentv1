@@ -601,11 +601,14 @@ function renderOrientacionPruebas(datos){
 }
 
 // Backlog 17: compatibilidad por proyecto, módulo y objetivo, antes de gastar tokens.
-const TEXTO_COMPAT = {compatible: 'Compatible', requiere_configuracion: 'Requiere configuración', no_soportado: 'No soportado', aviso: 'Aviso'};
+const TEXTO_COMPAT = {compatible: 'Compatible', requiere_configuracion: 'Requiere configuración', no_soportado: 'No soportado', aviso: 'Aviso', sin_objetivos: 'Sin objetivos'};
+// «1 requiere configuración», «2 requieren configuración».
+const cuentaCompat = (n, singular, plural) => `${n} ${n === 1 ? singular : plural}`;
 // Cuántos objetivos se listan en el detalle: en un proyecto grande pueden ser miles.
 const MAX_FILAS_COMPAT = 200;
-function listaCompat(titulo, filas){
+function listaCompat(singular, plural, filas){
   if(!filas.length) return '';
+  const titulo = filas.length === 1 ? singular : plural;
   const visibles = filas.slice(0, MAX_FILAS_COMPAT).map(f => `<li>${escHtml(f.ruta)} · <span class="mono">${escHtml(f.objetivo)}</span> — ${escHtml(f.motivo)}</li>`).join('');
   const resto = filas.length > MAX_FILAS_COMPAT ? `<li>… y ${filas.length - MAX_FILAS_COMPAT} más.</li>` : '';
   return `<details><summary>${filas.length} ${titulo}</summary><ul>${visibles}${resto}</ul></details>`;
@@ -618,7 +621,10 @@ function renderCompatibilidad(res){
   $('expCompatPreparacion').textContent = '';
   if(!c) return;
   const o = c.objetivos || {};
-  $('expCompatResumen').innerHTML = `<b>${escHtml(TEXTO_COMPAT[c.estado] || c.estado)}</b> · ${o.compatible || 0} se pueden probar tal como están · ${o.requiere_configuracion || 0} requieren configuración · ${o.no_soportado || 0} no soportados`;
+  $('expCompatResumen').innerHTML = `<b>${escHtml(TEXTO_COMPAT[c.estado] || c.estado)}</b> · `
+    + `${cuentaCompat(o.compatible || 0, 'se puede probar tal como está', 'se pueden probar tal como están')} · `
+    + `${cuentaCompat(o.requiere_configuracion || 0, 'requiere configuración', 'requieren configuración')} · `
+    + cuentaCompat(o.no_soportado || 0, 'no soportado', 'no soportados');
   $('expCompatRequisitos').innerHTML = (c.requisitos || []).map(r =>
     `<p class="np-texto"><b>${escHtml(TEXTO_COMPAT[r.estado] || r.estado)}</b> · ${escHtml(r.motivo)}</p>`).join('');
   const porEstado = {requiere_configuracion: [], no_soportado: []};
@@ -634,8 +640,8 @@ function renderCompatibilidad(res){
       porEstado.no_soportado.push({ruta, objetivo: 'archivo completo', motivo: m.motivo});
   });
   $('expCompatDetalle').innerHTML =
-    listaCompat('requieren configuración', porEstado.requiere_configuracion)
-    + listaCompat('no soportados', porEstado.no_soportado);
+    listaCompat('requiere configuración', 'requieren configuración', porEstado.requiere_configuracion)
+    + listaCompat('no soportado', 'no soportados', porEstado.no_soportado);
 }
 // La preparación consulta Docker: se pide aparte para no retrasar la Vista previa.
 const TEXTO_PREPARACION = {
@@ -1046,7 +1052,8 @@ function renderFns(){
   $('expTodo').indeterminate = marcadas > 0 && marcadas < marcables.length;
   // issue 266 (I1): la diferencia con la pestaña (que cuenta todo lo detectado) se explica aquí.
   const fueraDeCarpetas = Math.max(0, (esFns ? totalFuncionesDetectadas() : totalEndpointsDetectados()) - vistaTodas.length);
-  $('expMostrando').textContent = `Mostrando ${vistaVisibles.length} de ${vistaTodas.length} en las carpetas incluidas`
+  // Las filas dibujadas, no las que coinciden: con tandas, «425 de 425» con 300 a la vista confundía.
+  $('expMostrando').textContent = `Mostrando ${Math.min(vistaVisibles.length, FILAS_VISIBLES)} de ${vistaTodas.length} en las carpetas incluidas`
     + (fueraDeCarpetas ? ` · ${fueraDeCarpetas} más en carpetas no incluidas` : '');
   const sinDibujar = vistaVisibles.length - FILAS_VISIBLES;
   $('expMasFilas').hidden = sinDibujar <= 0;

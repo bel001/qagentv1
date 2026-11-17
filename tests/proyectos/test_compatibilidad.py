@@ -306,3 +306,15 @@ def test_un_lockfile_es_un_aviso_que_no_cambia_el_estado(tmp_path) -> None:
 
     assert resultado["estado"] == COMPATIBLE
     assert [r["estado"] for r in resultado["requisitos"]] == [compatibilidad.AVISO]
+
+
+def test_un_init_vacio_no_cuenta_como_no_soportado(tmp_path) -> None:
+    """Un `__init__.py` sin nada que probar no es «no soportado» (revisión visual)."""
+    _python(tmp_path)
+    (tmp_path / "__init__.py").write_text("", encoding="utf-8")
+
+    resultado, _ = _evaluar(tmp_path, PythonAdapter())
+
+    assert resultado["modulos"]["__init__.py"]["estado"] == compatibilidad.SIN_OBJETIVOS
+    assert resultado["objetivos"][NO_SOPORTADO] == 0
+    assert resultado["estado"] == COMPATIBLE
