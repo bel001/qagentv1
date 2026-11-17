@@ -107,6 +107,7 @@ def escribir_corrida(
     omitidos: list[dict[str, str]] | None = None,
     fuera_de_la_corrida: list[dict[str, Any]] | None = None,
     total_descubiertos: int | None = None,
+    contexto_automatico: list[dict[str, Any]] | None = None,
 ) -> RutasCorrida:
     """Genera, valida y escribe log.json y results.json de una corrida.
 
@@ -183,6 +184,8 @@ def escribir_corrida(
     contracts.validar(contracts.RUN_LOG, log)
     contracts.validar(contracts.RUN_LOG, results)
     detalle = construir_detalle(run_id, resultados)
+    if contexto_automatico:
+        detalle["contexto_automatico"] = contexto_automatico
     contracts.validar(contracts.DETALLE, detalle)
 
     carpeta = Path(raiz_proyecto) / CARPETA_RUNS / run_id

@@ -220,6 +220,7 @@ let PROYECTO_E2E_DISPONIBLE = null;
 let PROYECTO_MOTIVO_NO_EJECUTABLE = null;
 
 function mostrarLenguajeProyecto(res = {}) {
+  if (typeof COMPLETAR_CONTEXTO !== 'undefined') COMPLETAR_CONTEXTO = false;
   PROYECTO_NOMBRE_LENGUAJE = res.nombre_lenguaje || 'Python';
   PROYECTO_E2E_DISPONIBLE = typeof res.e2e_humo_disponible === 'boolean' ? res.e2e_humo_disponible : null;
   PROYECTO_MOTIVO_NO_EJECUTABLE = res.motivo_no_ejecutable || null;

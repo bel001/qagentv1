@@ -376,6 +376,7 @@ def _registrar(
                 *(no_soportados or []),
             ],
             fuera_de_la_corrida=fuera_de_la_corrida,
+            contexto_automatico=resumen.contexto_automatico or None,
         )
         resumen.run_id = rutas.run_id
         resumen.carpeta = str(rutas.carpeta)

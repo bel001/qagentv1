@@ -7,6 +7,29 @@
   "additionalProperties": false,
   "required": ["version", "lenguaje", "framework_pruebas", "modulo", "huella", "tipo", "objetivo", "firma", "critical", "casos"],
   "properties": {
+    "contexto_recuperado": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "estado", "motivo", "fuentes", "archivos_revisados"],
+      "properties": {
+        "version": { "const": "1" },
+        "estado": { "enum": ["recuperado", "insuficiente", "contradictorio", "no_soportado"] },
+        "motivo": { "type": "string" },
+        "archivos_revisados": { "type": "array", "maxItems": 33, "uniqueItems": true, "items": { "type": "string" } },
+        "fuentes": {
+          "type": "array", "maxItems": 30,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["archivo", "linea_inicio", "fragmento", "huella"],
+            "properties": {
+              "archivo": { "type": "string", "minLength": 1 },
+              "linea_inicio": { "type": "integer", "minimum": 1 },
+              "fragmento": { "type": "string", "maxLength": 6000 },
+              "huella": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        }
+      }
+    },
     "version": { "const": "3" },
     "lenguaje": {
       "enum": ["python", "javascript", "typescript", "java"],
@@ -54,6 +77,20 @@
       "$ref": "#/$defs/nombre_calificado",
       "description": "Símbolo de la aplicación web que el test importa (app de FastAPI o de Express, clase de Spring)."
     },
+    "dependencias_detectadas": {
+      "type": "array",
+      "description": "Depends o Security obtenidos por lectura estática, incluidos alias Annotated importados. No son reemplazos ni valores esperados.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["parametro", "funcion", "en_proyecto"],
+        "properties": {
+          "parametro": { "type": ["string", "null"] },
+          "funcion": { "type": ["string", "null"] },
+          "en_proyecto": { "type": ["string", "null"] }
+        }
+      }
+    },
     "dependencias": {
       "type": "array",
       "items": { "$ref": "#/$defs/dependencia" },
@@ -95,6 +132,14 @@
     }
   },
   "allOf": [
+    {
+      "if": { "required": ["contexto_recuperado"] },
+      "then": { "properties": { "lenguaje": { "enum": ["javascript", "typescript"] }, "tipo": { "const": "funcion" } } }
+    },
+    {
+      "if": { "required": ["dependencias_detectadas"] },
+      "then": { "properties": { "lenguaje": { "const": "python" }, "tipo": { "const": "endpoint" } } }
+    },
     {
       "description": "Python: pytest y FastAPI; los nombres son identificadores de Python (igual que v2).",
       "if": { "properties": { "lenguaje": { "const": "python" } } },

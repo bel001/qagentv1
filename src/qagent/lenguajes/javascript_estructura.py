@@ -519,6 +519,8 @@ def describir(exportada: Exportada) -> dict[str, Any]:
         "es_async": es_async(nodo),
         "exportacion": exportada.exportacion,
     }
+    if nodo.type in {"generator_function_declaration", "generator_function"}:
+        descripcion["es_generador"] = True
     if exportada.clase is not None:
         descripcion["clase"] = exportada.clase
         descripcion["es_static"] = any(h.type == "static" for h in nodo.children)

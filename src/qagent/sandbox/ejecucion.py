@@ -273,6 +273,9 @@ def comando_pytest(modulo_cov: str) -> list[str]:
         DIR_TESTS,
         f"--cov={modulo_cov}",
         "--cov-branch",
+        # Las metas de QAgent se evalúan por objetivo en el Reviewer. El umbral
+        # global del proyecto no debe cambiar el exit_code de una prueba aislada.
+        "--cov-fail-under=0",
         f"--cov-report=json:{DIR_SALIDA}/coverage.json",
         f"--junitxml={DIR_SALIDA}/{ARCHIVO_JUNIT}",
         "-p",

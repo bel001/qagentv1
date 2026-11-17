@@ -172,7 +172,18 @@ QAgent genera pruebas **unitarias** para código **Python**, **Java** (Maven/JUn
 
 **JavaScript y TypeScript.** QAgent genera y ejecuta pruebas **unitarias** con Vitest, pruebas de **componentes React** con Testing Library y **mutación con Stryker** en funciones críticas, en la imagen `qagent-sandbox:node` sin red. Con otros frameworks de interfaz (Angular, Vue, Astro…) solo prueba los archivos de lógica y el informe marca «componentes no soportados».
 
+Si una función JavaScript/TypeScript necesita contexto, activa **Completar contexto
+automáticamente** en Preparar o en el aviso al comenzar. QAgent busca ejemplos con
+entrada y resultado en el JSDoc del archivo y en README o `docs/` que identifiquen
+el módulo. Por ejemplo, `nthFibonacci(4) => 3`. La búsqueda local no consume tokens;
+la generación posterior usa los agentes configurados. El informe PDF, HTML,
+Markdown o JSON conserva los archivos, las líneas y los fragmentos utilizados.
+Si falta evidencia o se contradice, la función se omite con su motivo. Los
+generadores necesitan declarar cuántos elementos consumir y sus resultados.
+Completar contexto no garantiza que las pruebas pasen ni modifica tus archivos.
+
 ## Para el equipo de desarrollo
+
 
 Cómo preparar el entorno, ejecutar las pruebas, construir el instalador y publicar una versión: [`docs/desarrollo.md`](https://github.com/AngelOncoy/QAgent/blob/develop/docs/desarrollo.md). Las reglas del proyecto están en [`AGENTS.md`](https://github.com/AngelOncoy/QAgent/blob/develop/AGENTS.md), las decisiones técnicas en [`docs/decisiones/`](https://github.com/AngelOncoy/QAgent/tree/develop/docs/decisiones) y las notas de cada versión en [`docs/releases/`](https://github.com/AngelOncoy/QAgent/tree/develop/docs/releases).
 

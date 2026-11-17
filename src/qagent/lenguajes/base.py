@@ -260,6 +260,7 @@ class LanguageAdapter(ABC):
     motor_mutacion: ClassVar[str] = "mutación"
     #: Comprobación opcional de librerías del sistema propia del entorno Python.
     comprobar_librerias_sistema: ClassVar[bool] = False
+    contexto_automatico_disponible: ClassVar[bool] = False
     extensiones: ClassVar[tuple[str, ...]]
     marcadores: ClassVar[tuple[str, ...]] = ()
     frameworks_pruebas: ClassVar[tuple[str, ...]]
@@ -361,6 +362,30 @@ class LanguageAdapter(ABC):
     def aplicacion_de_endpoint(self, endpoint: dict[str, Any], principal: str) -> str:
         """Símbolo de aplicación por endpoint; por defecto usa el del módulo."""
         return principal
+
+    def contexto_de_endpoint(self, endpoint: dict[str, Any]) -> dict[str, Any]:
+        """Metadatos estáticos opcionales que acompañan al contrato del endpoint."""
+        return {}
+
+    def completar_contexto(
+        self, raiz: Path, modulos: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Recupera documentación explícita de forma optativa; conserva los originales."""
+        return modulos
+
+    def contexto_de_funcion(self, funcion: dict[str, Any]) -> dict[str, Any]:
+        """Metadata estática opcional para el contrato de una función."""
+        return {}
+
+    def motivo_funcion_no_planificable(self, funcion: dict[str, Any]) -> str | None:
+        """Filtro anterior al LLM que no impide seleccionar para recuperar contexto."""
+        return None
+
+    def contexto_spec_vigente(
+        self, contrato: dict[str, Any], modulo: dict[str, Any]
+    ) -> bool:
+        """Si las fuentes documentales de una spec todavía coinciden con el análisis."""
+        return True
 
     def objetivo_de_cobertura(self, contrato: dict[str, Any]) -> str:
         """Identidad del cuerpo probado: manejador de endpoint o función del contrato."""

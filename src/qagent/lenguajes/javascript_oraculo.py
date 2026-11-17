@@ -462,7 +462,11 @@ def posicionales(funcion: dict[str, Any], entrada: Any) -> list[Any] | None:
 
 
 #: Fuente de la evidencia -> ``origen`` del caso en ``planner_contract.v3``.
-ORIGEN_DE_FUENTE = {"jsdoc": "docstring", "typescript": "tipo"}
+ORIGEN_DE_FUENTE = {
+    "jsdoc": "docstring",
+    "typescript": "tipo",
+    "contrato_explicito": "docstring",
+}
 
 
 def _elegir(

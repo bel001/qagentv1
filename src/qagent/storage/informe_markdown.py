@@ -57,6 +57,19 @@ def construir_markdown_informe(
     lineas.extend(_md_salud(datos))
     lineas.extend(_md_prioridades(bugs))
     lineas.extend(_md_datos_corrida(datos))
+    from qagent.storage.informe_contexto import lineas_contexto
+
+    contexto = lineas_contexto(datos)
+    if contexto:
+        lineas.extend(
+            [
+                "",
+                "## Contexto recuperado automáticamente",
+                "",
+                *["- " + linea.replace("\n", " ") for linea in contexto],
+                "",
+            ]
+        )
     if opts["detalle"]:
         lineas.extend(_md_tabla_funciones(funciones))
         lineas.extend(_markdown_categorias(datos))

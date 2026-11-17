@@ -871,6 +871,13 @@ def construir_pdf(
     _metas(lz, datos)
     _prioridades(lz, funciones, limpiar)
     _datos_corrida(lz, datos, limpiar)
+    from qagent.storage.informe_contexto import lineas_contexto
+
+    contexto = lineas_contexto(datos)
+    if contexto:
+        lz.titulo_seccion("Contexto recuperado automáticamente")
+        for linea in contexto:
+            lz.parrafo(limpiar(linea), 9, "F1", TEXTO)
     _comparacion_corridas(lz, datos, limpiar)
 
     if opts.get("detalle"):

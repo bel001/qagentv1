@@ -163,6 +163,7 @@ class _Modulo:
     imports: dict[str, tuple[str, str | None]] = field(default_factory=dict)
     funciones: dict[str, Node] = field(default_factory=dict)
     clases: dict[str, Node] = field(default_factory=dict)
+    alias_tipos: dict[str, Node] = field(default_factory=dict)
     #: nombre → ("app" | "router", prefijo del APIRouter o None si no es literal)
     objetos: dict[str, tuple[str, str | None]] = field(default_factory=dict)
 
@@ -240,6 +241,10 @@ class _Proyecto:
     def _registrar_objeto(modulo: _Modulo, asignacion: Node) -> None:
         objetivos, valor = _asignacion(asignacion)
         valor = sin_envoltura(valor)
+        if valor is not None:
+            for objetivo in objetivos:
+                if objetivo.type == "identifier":
+                    modulo.alias_tipos[texto(objetivo)] = valor
         if valor is None or valor.type != "call":
             return
         tipo = _ultimo_nombre(campo(valor, "function"))
@@ -260,20 +265,34 @@ class _Proyecto:
 
     # --- resolución de nombres --------------------------------------------
     def resolver(
-        self, modulo: _Modulo, expr: Node | None, profundidad: int = 0
+        self,
+        modulo: _Modulo,
+        expr: Node | None,
+        profundidad: int = 0,
+        *,
+        alias_tipos: bool = False,
     ) -> tuple[str, str] | None:
         """(ruta del módulo, nombre) del símbolo del proyecto al que apunta ``expr``."""
         expr = sin_envoltura(expr)
         if expr is None:
             return None
         if expr.type == "identifier":
-            return self.resolver_nombre(modulo, texto(expr), profundidad)
+            return self.resolver_nombre(
+                modulo, texto(expr), profundidad, alias_tipos=alias_tipos
+            )
         if expr.type == "attribute":
-            return self._resolver_atributo(modulo, expr, profundidad)
+            return self._resolver_atributo(
+                modulo, expr, profundidad, alias_tipos=alias_tipos
+            )
         return None
 
     def resolver_nombre(
-        self, modulo: _Modulo, nombre_simbolo: str, profundidad: int = 0
+        self,
+        modulo: _Modulo,
+        nombre_simbolo: str,
+        profundidad: int = 0,
+        *,
+        alias_tipos: bool = False,
     ) -> tuple[str, str] | None:
         if profundidad > 5:
             return None
@@ -281,6 +300,7 @@ class _Proyecto:
             nombre_simbolo in modulo.funciones
             or nombre_simbolo in modulo.clases
             or nombre_simbolo in modulo.objetos
+            or (alias_tipos and nombre_simbolo in modulo.alias_tipos)
         ):
             return modulo.ruta, nombre_simbolo
         if nombre_simbolo in modulo.imports:
@@ -288,11 +308,18 @@ class _Proyecto:
             if original is None:
                 return None  # es un módulo, no un símbolo
             otro = self.modulos[destino]
-            return self.resolver_nombre(otro, original, profundidad + 1)
+            return self.resolver_nombre(
+                otro, original, profundidad + 1, alias_tipos=alias_tipos
+            )
         return None
 
     def _resolver_atributo(
-        self, modulo: _Modulo, expr: Node, profundidad: int
+        self,
+        modulo: _Modulo,
+        expr: Node,
+        profundidad: int,
+        *,
+        alias_tipos: bool = False,
     ) -> tuple[str, str] | None:
         if profundidad > 5:
             return None
@@ -306,7 +333,9 @@ class _Proyecto:
                 if len(partes) == 2:
                     otro = self.modulos.get(destino)
                     if otro:
-                        return self.resolver_nombre(otro, partes[1], profundidad + 1)
+                        return self.resolver_nombre(
+                            otro, partes[1], profundidad + 1, alias_tipos=alias_tipos
+                        )
                 else:
                     dest_punteado = nombre_punteado(destino)
                     sub = self.buscar_modulo(
@@ -314,12 +343,18 @@ class _Proyecto:
                     )
                     if sub and sub in self.modulos:
                         return self.resolver_nombre(
-                            self.modulos[sub], partes[-1], profundidad + 1
+                            self.modulos[sub],
+                            partes[-1],
+                            profundidad + 1,
+                            alias_tipos=alias_tipos,
                         )
         sub_directo = self.buscar_modulo(".".join(partes[:-1]))
         if sub_directo and sub_directo in self.modulos:
             return self.resolver_nombre(
-                self.modulos[sub_directo], partes[-1], profundidad + 1
+                self.modulos[sub_directo],
+                partes[-1],
+                profundidad + 1,
+                alias_tipos=alias_tipos,
             )
         return None
 
@@ -491,6 +526,23 @@ class _Analisis:
         self.modelos = self._buscar_modelos()
         self.inclusiones = self._buscar_inclusiones()
         self._llama_a: dict[tuple[str, int], list[str]] = {}
+
+    def _anotacion_resuelta(
+        self, modulo: _Modulo, anotacion: Node | None
+    ) -> tuple[_Modulo, Node | None]:
+        """Resuelve alias Annotated locales o importados, sin importar el proyecto."""
+        visitados: set[tuple[str, str]] = set()
+        for _ in range(10):
+            destino = self.p.resolver(modulo, anotacion, alias_tipos=True)
+            if destino is None or destino in visitados:
+                break
+            visitados.add(destino)
+            otro = self.p.modulos[destino[0]]
+            valor = otro.alias_tipos.get(destino[1])
+            if valor is None:
+                break
+            modulo, anotacion = otro, valor
+        return modulo, anotacion
 
     # --- modelos Pydantic -------------------------------------------------
     def _buscar_modelos(self) -> set[tuple[str, str]]:
@@ -761,7 +813,8 @@ class _Analisis:
         ]
         for argumento in todos:
             defecto = argumento.defecto
-            tipo, extra = _metadatos(argumento.tipo)
+            modulo_tipo, anotacion = self._anotacion_resuelta(modulo, argumento.tipo)
+            tipo, extra = _metadatos(anotacion)
             marcadores = [sin_envoltura(e) for e in [*extra, defecto] if _es_llamada(e)]
             marca = next(
                 (
@@ -793,7 +846,10 @@ class _Analisis:
                     {
                         "parametro": argumento.nombre,
                         "funcion": _texto(objetivo),
-                        "en_proyecto": self._ref(modulo, objetivo),
+                        "en_proyecto": self._ref(
+                            modulo if marca == sin_envoltura(defecto) else modulo_tipo,
+                            objetivo,
+                        ),
                     }
                 )
                 continue

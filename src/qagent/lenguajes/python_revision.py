@@ -432,6 +432,31 @@ class ReglasRevisionPython:
             )
         if cls._es_error_del_test(salida):
             return Clasificacion("error_test", salida)
+        if contrato.get("tipo") == "endpoint" and re.search(
+            r"Instance of type \S+ not found in registry",
+            salida,
+        ):
+            return Clasificacion(
+                "error_test",
+                "Falta registrar la configuración de una dependencia en la prueba. "
+                "Revisa el callable de Depends y su override en app_pruebas; "
+                "no uses la autenticación ni servicios reales. Conserva las "
+                "aserciones del contrato.\n" + salida,
+            )
+        if (
+            contrato.get("tipo") == "endpoint"
+            and re.search(r"assert\s+500\s*==\s*(?!500\b)\d{3}", salida)
+            and re.search(r"<Response\s*\[500\b", salida)
+        ):
+            return Clasificacion(
+                "error_test",
+                "El endpoint devolvió un 500 sin una excepción interna que permita "
+                "atribuirlo al proyecto. Repite la prueba con "
+                "TestClient(app_pruebas, raise_server_exceptions=True), conserva "
+                "las aserciones del contrato y revisa los overrides de autenticación "
+                "y los dobles asíncronos. Un 500 aislado no demuestra un bug.\n"
+                + salida,
+            )
         if cls._es_fallo_asercion(salida):
             return Clasificacion("fallo_asercion", salida)
         return None

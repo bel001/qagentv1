@@ -12,12 +12,14 @@ concreto. Decisión completa en `docs/decisiones/ADR-007-adaptadores-por-lenguaj
 | `python.py` | `PythonAdapter` (delega en los módulos `python_*`) | Completo |
 | `python_planificacion.py` | Prompts del Planner y filtros de casos de pytest y FastAPI (#168) | Completo |
 | `python_generacion.py` | Prompt del Generator: archivo pytest con el contexto del módulo (#168) | Completo |
+| `python_endpoints.py` | Plantilla de montaje FastAPI y comprobación estática del uso de APIRouter antes del sandbox | Completo |
 | `python_revision.py` | Sintaxis, oráculo y clasificación de la salida de pytest para el Reviewer (#168) | Completo |
 | `python_regresion.py` | Huellas de los objetivos y línea de cada función (#168) | Completo |
 | `javascript.py` | `JavaScriptAdapter`, `TypeScriptAdapter`: `analizar()`, `objetivos()`, reglas del Planner, prompt del Generator, reglas del Reviewer, `archivo_de_prueba` y `comparar_aserciones` | Completo (EP-11): analiza y planifica (#176), genera Vitest y detecta laundering (#177), ejecuta en `qagent-sandbox:node` (#178; dependencias con npm, pnpm o yarn y workspaces, sin scripts del proyecto: #272, ADR-015), componentes React (#171) y Stryker (#179). `marcadores_si_mixto` evita elegir JS/TS en un proyecto Python o Java sin `package.json`/`tsconfig.json` en la raíz, y `lenguajes_hermanos` hace que los `.js` o `.ts` que la corrida no prueba se avisen (`Registro.fuera_de_la_corrida`) |
 | `javascript_estructura.py` | Funciones exportadas (ESM, CommonJS y métodos de clase), parámetros y tipos de TS, JSDoc desglosado y conteo de ramas (#176) | Completo |
 | `javascript_llamadas.py` | `llama_a`: llamadas al mismo módulo, a imports ESM y a `require` relativos (#176) | Completo |
 | `javascript_oraculo.py` | Registro de evidencias desde JSDoc y tipos, y `oracle.v1` de cada caso validado con `validar_oraculo_js_ts` (#176) | Completo |
+| `javascript_contexto.py` | Recuperación optativa de ejemplos explícitos del módulo, README y `docs/`, con archivo, línea, fragmento y huella verificables (ADR-018) | Disponible para unitarias JS/TS |
 | `javascript_planificacion.py` | Prompt de Vitest y filtros del Planner con oráculo estricto (#176) | Completo |
 | `javascript_generacion.py` | Prompt y plantilla Vitest (`describe`/`it`/`expect`) que importa la función desde su módulo, archivo `generado.test.ts`/`.js` y oráculo de la prueba generada (#177) | Completo |
 | `javascript_aserciones.py` | Lectura con tree-sitter de cada `expect(...)[.not].matcher(...)`, su prueba y las evasiones (`it.skip`, `try/catch` que traga el error, `expect` sobre un literal) (#177) | Completo |
@@ -28,6 +30,26 @@ concreto. Decisión completa en `docs/decisiones/ADR-007-adaptadores-por-lenguaj
 | `java.py` | `JavaAdapter` | Unitarias Maven/JUnit 5 y endpoints Spring MVC con MockMvc, guardrail y JaCoCo en sandbox (#181, #184, #182, #183); Gradle queda fuera. |
 
 ## Uso
+
+En FastAPI, el contrato v3 puede incluir `dependencias_detectadas`: cada entrada
+conserva `parametro`, `funcion` y la referencia `en_proyecto` de un `Depends` o
+`Security`, incluidos alias `Annotated` importados. Esta lista describe dependencias;
+`dependencias` sigue siendo la lista de reemplazos declarados. Una lista de
+reemplazos vacía no demuestra que la ruta no necesite autenticación. Las specs
+reutilizadas reciben el contexto actual mediante `contexto_de_endpoint`, sin
+cambiar sus casos ni llamar al Planner.
+
+El Generator recibe el manejador y el contexto de esas dependencias, además de una
+plantilla calculada para montar el router en una aplicación FastAPI, conservar su
+prefijo y registrar los overrides en la aplicación. Los servicios con `await`
+necesitan dobles asíncronos. La validación previa rechaza `TestClient(router)` y
+`router.dependency_overrides` cuando el símbolo analizado es un APIRouter. Un 500
+opaco solicita un nuevo intento con diagnóstico y no basta para declarar un bug.
+
+pytest sigue midiendo la cobertura, pero usa `--cov-fail-under=0` para impedir que
+el umbral global del proyecto cambie el resultado de una prueba aislada. QAgent
+calcula y presenta sus propias metas de cobertura por objetivo. No se modifican
+las aserciones ni la configuración del proyecto original.
 
 Spring (#183) añade detección estática, planificación, generación y ejecución de
 endpoints sobre la base Java. El alcance y sus límites están en

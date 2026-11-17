@@ -492,6 +492,18 @@ class Orquestador:
             adaptador = getattr(self.planner, "adaptador", None)
             bloqueados = {}
             if adaptador is not None:
+                endpoints = {e["objetivo"]: e for e in modulo.get("endpoints", [])}
+                for indice, contrato in enumerate(contratos):
+                    endpoint = endpoints.get(contrato["objetivo"])
+                    if contrato.get("tipo") == "endpoint" and endpoint is not None:
+                        contexto = adaptador.contexto_de_endpoint(endpoint)
+                        if contexto:
+                            # Una spec antigua conserva sus casos y recibe solo el
+                            # contexto estático actual, sin volver a gastar tokens.
+                            contratos[indice] = {
+                                **contracts.normalizar_planner(contrato),
+                                **contexto,
+                            }
                 for funcion in modulo.get("funciones", []):
                     motivo = adaptador.motivo_funcion_no_soportada(funcion)
                     if isinstance(motivo, str) and motivo:

@@ -39,6 +39,7 @@ class CorridaMixin:
         seleccion: list[dict[str, Any]] | None = None,
         inferir: bool | None = None,
         revisar_inferidos: bool = False,
+        completar_contexto: bool = False,
     ) -> dict:
         """Inicia la corrida del sistema sobre el proyecto seleccionado.
 
@@ -87,6 +88,20 @@ class CorridaMixin:
             motivo := adaptador.motivo_no_ejecutable(folder_path)
         ):
             return {"status": "blocked", "motivo": motivo, "problemas": [motivo]}
+        if not isinstance(completar_contexto, bool):
+            return {
+                "status": "blocked",
+                "motivo": "La opción de contexto debe ser booleana.",
+            }
+        if (
+            completar_contexto
+            and adaptador is not None
+            and not adaptador.contexto_automatico_disponible
+        ):
+            return {
+                "status": "blocked",
+                "motivo": "El contexto documental automático está disponible para JavaScript y TypeScript.",
+            }
         if seleccion is not None and adaptador is not None:
             try:
                 filtrar_modulos(adaptador.analizar(folder_path)["modulos"], seleccion)
@@ -193,6 +208,8 @@ class CorridaMixin:
                 extra["inferir"] = inferir
             if revisar_inferidos:
                 extra["revisar_inferidos"] = True
+            if completar_contexto:
+                extra["completar_contexto"] = True
             self._lanzar_corrida(
                 folder_path, profile, run_id, simulado, seleccion, **extra
             )
@@ -222,6 +239,7 @@ class CorridaMixin:
         *,
         inferir: bool | None = None,
         revisar_inferidos: bool = False,
+        completar_contexto: bool = False,
     ) -> None:
         """Ejecuta la corrida en un hilo para no congelar la ventana.
 
@@ -238,8 +256,9 @@ class CorridaMixin:
                 for clave, valor in (
                     ("inferir", inferir),
                     ("revisar_inferidos", revisar_inferidos),
+                    ("completar_contexto", completar_contexto),
                 )
-                if valor is not None and valor is not False
+                if valor is not None and (clave == "inferir" or valor is not False)
             },
             name="qagent-corrida",
             daemon=True,
@@ -257,10 +276,11 @@ class CorridaMixin:
         *,
         inferir: bool | None = None,
         revisar_inferidos: bool = False,
+        completar_contexto: bool = False,
     ) -> None:
         """Corre la corrida y suelta su bloqueo al terminar, pase lo que pase (#139)."""
         try:
-            if inferir is None and not revisar_inferidos:
+            if inferir is None and not revisar_inferidos and not completar_contexto:
                 self._correr(ruta, perfil, run_id, simulado, seleccion)
             else:
                 self._correr(
@@ -271,6 +291,7 @@ class CorridaMixin:
                     seleccion,
                     inferir=inferir,
                     revisar_inferidos=revisar_inferidos,
+                    **({"completar_contexto": True} if completar_contexto else {}),
                 )
         finally:
             if bloqueo is not None:
@@ -287,6 +308,7 @@ class CorridaMixin:
         *,
         inferir: bool | None = None,
         revisar_inferidos: bool = False,
+        completar_contexto: bool = False,
     ) -> None:
         """Cuerpo del hilo: lee la configuración, corre el pipeline y avisa el final."""
         from qagent.config import carga as config_carga
@@ -327,6 +349,8 @@ class CorridaMixin:
                 opciones_corrida["inferir"] = inferir
             if revisar_inferidos:
                 opciones_corrida["revisor_inferidos"] = self._revisar_inferidos
+            if completar_contexto:
+                opciones_corrida["completar_contexto"] = True
             resumen = ejecutar_corrida(
                 ruta,
                 perfil,

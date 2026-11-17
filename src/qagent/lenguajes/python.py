@@ -276,6 +276,11 @@ class PythonAdapter(LanguageAdapter):
         """Prompts y filtros de casos de pytest y FastAPI para el Planner (#168)."""
         return REGLAS_PLANIFICACION_PYTHON
 
+    def contexto_de_endpoint(self, endpoint: dict[str, Any]) -> dict[str, Any]:
+        """Conserva los Depends detectados aunque todavía no tengan un reemplazo."""
+        dependencias = endpoint.get("dependencias", [])
+        return {"dependencias_detectadas": dependencias} if dependencias else {}
+
     def proveedor_inferencia(
         self,
         raiz: str | os.PathLike[str],
@@ -304,6 +309,16 @@ class PythonAdapter(LanguageAdapter):
     def reglas_revision(self) -> ReglasRevisionPython:
         """Sintaxis, oráculo y salida de pytest para el Reviewer (#168)."""
         return REGLAS_REVISION_PYTHON
+
+    def validar_oraculo(
+        self, contrato: dict[str, Any], codigo: str, ruta_proyecto: Path
+    ) -> str | None:
+        """Comprueba el montaje FastAPI y las aserciones antes de ejecutar el test."""
+        from qagent.lenguajes.python_endpoints import error_preparacion_endpoint
+
+        return error_preparacion_endpoint(
+            contrato, codigo, ruta_proyecto
+        ) or self.reglas_revision().validar_oraculo(contrato, codigo)
 
     def comando_mutacion(self, modulo: str, funciones: list[str]) -> ComandoSandbox:
         """mutmut sobre las funciones críticas, con el script del sandbox (EN-09)."""

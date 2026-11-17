@@ -328,7 +328,9 @@ class ReviewerAgent:
             return self._error_test(
                 contrato,
                 intento,
-                salida or "El test generado contiene un error técnico.",
+                clasificacion.detalle
+                or salida
+                or "El test generado contiene un error técnico.",
                 cobertura,
             )
 

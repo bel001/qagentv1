@@ -213,7 +213,9 @@ class PlannerAgent:
         self._rechazos = {}
         funciones = {}
         for funcion in modulo.get("funciones", []):
-            motivo = self.adaptador.motivo_funcion_no_soportada(funcion)
+            motivo = self.adaptador.motivo_funcion_no_soportada(
+                funcion
+            ) or self.adaptador.motivo_funcion_no_planificable(funcion)
             if motivo:
                 self.omitidas[funcion["nombre"]] = motivo
             else:
@@ -503,6 +505,7 @@ class PlannerAgent:
             and not funcion.get("tipo_metodo"),
             "llama_a": list(dict.fromkeys(funcion.get("llama_a") or [])),
             "casos": casos,
+            **self.adaptador.contexto_de_funcion(funcion),
         }
         if funcion.get("tipo_metodo"):
             contrato["metodo"] = {
@@ -915,6 +918,7 @@ class PlannerAgent:
             "manejador": endpoint["manejador"],
             "aplicacion": self.adaptador.aplicacion_de_endpoint(endpoint, aplicacion),
             "dependencias": self.reglas.dependencias_con_reemplazo(modulo, endpoint),
+            **self.adaptador.contexto_de_endpoint(endpoint),
             "firma": endpoint.get("firma") or "()",
             "critical": bool(endpoint.get("critical", False)),
             "llama_a": list(dict.fromkeys(endpoint.get("llama_a") or [])),

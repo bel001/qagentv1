@@ -93,6 +93,7 @@ def _analizar_entrada(
     progreso: dict[str, int],
     avisar: Callable[..., None],
     avisar_entorno: Callable[..., None],
+    completar_contexto: bool = False,
 ) -> _EntradaCorrida | None:
     """Elige el adaptador y los módulos; None si la corrida ya se detuvo."""
     from qagent.proyectos.seleccion import filtrar_modulos
@@ -128,6 +129,21 @@ def _analizar_entrada(
     modulos = [
         _con_fuente(ruta, m) for m in filtrar_modulos(analisis["modulos"], seleccion)
     ]
+    if completar_contexto:
+        modulos = adaptador.completar_contexto(ruta, modulos)
+        resumen.contexto_automatico = [
+            {
+                "modulo": m["ruta"],
+                "objetivo": f["nombre"],
+                "contexto": f["contexto_recuperado"],
+            }
+            for m in modulos
+            for f in m.get("funciones", [])
+            if f.get("contexto_recuperado")
+        ]
+        avisar(
+            "Contexto automático: lectura de documentación local completada (0 tokens)."
+        )
     n_funciones, n_integraciones, n_endpoints, n_componentes = _cifras_de_modulos(
         modulos
     )
@@ -448,6 +464,11 @@ def _preparar_modulo(
     if plan_guardado is not None:
         objetivos = _objetivos_de(modulo)
         elegidos = [c for c in plan_guardado["contratos"] if c["objetivo"] in objetivos]
+        adaptador = getattr(orquestador.planner, "adaptador", None)
+        if adaptador is not None:
+            elegidos = [
+                c for c in elegidos if adaptador.contexto_spec_vigente(c, modulo)
+            ]
         # #138: una spec anterior puede traer casos triviales de TypeError; sin
         # ellos, la que queda vacía se vuelve a planificar.
         elegidos = [h for h in map(contrato_sin_triviales, elegidos) if h]
