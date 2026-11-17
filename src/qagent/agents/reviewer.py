@@ -34,6 +34,26 @@ from qagent.sandbox.normalizacion import hash_error
 Ejecutor = Callable[[str, Path, Path, str], ResultadoSandbox]
 
 
+#: Caracteres de la salida del runner que se envían al LLM para clasificar un fallo
+#: ambiguo. La salida completa puede pesar megabytes: mandarla entera gastaba tokens
+#: sin aportar y podía superar la ventana del modelo, con lo que fallaba el módulo.
+LARGO_MAXIMO_SALIDA_CLASIFICACION = 4000
+#: Parte de ese tope que se toma del inicio (el error de colección o de import); el
+#: resto sale del final, donde el runner resume el fallo.
+LARGO_INICIO_SALIDA_CLASIFICACION = 1000
+
+
+def recortar_salida(
+    salida: str, maximo: int = LARGO_MAXIMO_SALIDA_CLASIFICACION
+) -> str:
+    """Deja el inicio y el final de la salida del runner, que es donde está el error."""
+    if len(salida) <= maximo:
+        return salida
+    inicio = min(LARGO_INICIO_SALIDA_CLASIFICACION, maximo // 4)
+    final = salida[-(maximo - inicio) :]
+    return "\n".join([salida[:inicio], "[…recortado…]", final])
+
+
 class ReviewerAgent:
     """Ejecuta un test en Docker y emite un review_result."""
 
@@ -434,10 +454,10 @@ Responde únicamente con una de estas opciones:
 - bug_codigo: una aserción legítima demuestra que el código no cumple el contrato.
 
 CONTRATO DEL PLANNER:
-{json.dumps(contrato, ensure_ascii=False, indent=2)}
+{json.dumps(contrato, ensure_ascii=False)}
 
 SALIDA DE {framework.upper()}:
-{salida}
+{recortar_salida(salida)}
 """.strip()
 
         respuesta = self.cliente.generar(prompt, rol="reviewer")

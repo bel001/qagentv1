@@ -177,14 +177,62 @@ def test_excluye_pruebas_y_compilados(tmp_path: Path) -> None:
 
 
 def test_reporta_sobrecargas_sin_objetivos_ambiguos(tmp_path: Path) -> None:
-    """Dos métodos con el mismo objetivo generan un error de alcance explícito."""
+    """Las sobrecargas no son objetivos, y cada una se identifica con su motivo."""
     (tmp_path / "Sobrecarga.java").write_text(
         "class A { public void f() {} public void f(int x) {} }",
         encoding="utf-8",
     )
     estructura = JavaAdapter().analizar(tmp_path)
-    assert estructura["modulos"] == []
-    assert "Sobrecarga no admitida" in estructura["errores"][0]["mensaje"]
+    assert estructura["errores"] == []
+    [modulo] = estructura["modulos"]
+    assert modulo["funciones"] == []
+    assert [
+        (m["clase"], m["nombre"], m["linea"])
+        for m in modulo["metodos_no_seleccionables"]
+    ] == [("A", "f()", 1), ("A", "f(int)", 1)]
+    assert all(
+        "Clase.metodo" in m["motivo"] for m in modulo["metodos_no_seleccionables"]
+    )
+
+
+def test_una_sobrecarga_no_descarta_los_demas_metodos_del_archivo(
+    tmp_path: Path,
+) -> None:
+    """Antes, una sola sobrecarga rechazaba el archivo entero (97 en Commons Lang)."""
+    (tmp_path / "Texto.java").write_text(
+        "public class Texto {\n"
+        "  public static String recortar(String s) { return s.trim(); }\n"
+        "  public static int largo(String s) { return s.length(); }\n"
+        "  public static int largo(String s, int tope) { return Math.min(s.length(), tope); }\n"
+        "  public static boolean vacio(String s) { return s.isEmpty(); }\n"
+        "  static class Interna { public int doble(int x) { return x * 2; } }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    estructura = JavaAdapter().analizar(tmp_path)
+
+    assert estructura["errores"] == []
+    [modulo] = estructura["modulos"]
+    assert [f["nombre"] for f in modulo["funciones"]] == [
+        "Texto.Interna.doble",
+        "Texto.recortar",
+        "Texto.vacio",
+    ]
+    assert [(m["nombre"], m["linea"]) for m in modulo["metodos_no_seleccionables"]] == [
+        ("largo(String)", 3),
+        ("largo(String, int)", 4),
+    ]
+
+
+def test_sin_sobrecargas_el_modulo_no_lleva_metodos_no_seleccionables(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "Simple.java").write_text(
+        "class Simple { public int uno() { return 1; } }", encoding="utf-8"
+    )
+    [modulo] = JavaAdapter().analizar(tmp_path)["modulos"]
+    assert "metodos_no_seleccionables" not in modulo
+    assert [f["nombre"] for f in modulo["funciones"]] == ["Simple.uno"]
 
 
 def test_raiz_inexistente(tmp_path: Path) -> None:

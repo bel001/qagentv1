@@ -32,6 +32,20 @@ def _funcion_llamada(contrato: dict[str, Any]) -> str:
     return str(contrato["objetivo"])
 
 
+def _llamada_del_caso(contrato: dict[str, Any], caso: dict[str, Any]) -> str:
+    """La llamada que demuestra el caso, con sus entradas literales (para el feedback)."""
+    entrada = caso.get("entrada")
+    if isinstance(entrada, dict):
+        argumentos = ", ".join(
+            f"{nombre}={valor!r}" for nombre, valor in entrada.items()
+        )
+    elif isinstance(entrada, list):
+        argumentos = ", ".join(repr(valor) for valor in entrada)
+    else:
+        argumentos = ""
+    return f"{_funcion_llamada(contrato)}({argumentos})"
+
+
 _PATRONES_ERROR_TEST = (
     "syntaxerror",
     "indentationerror",
@@ -117,7 +131,11 @@ class ReglasRevisionPython:
                 if posicion is None:
                     return (
                         f"Oráculo inválido: el caso '{caso['id']}' no comprueba "
-                        f"el valor esperado {esperado!r}."
+                        f"el valor esperado {esperado!r}. Corrige esto: "
+                        f"escribe `assert {_llamada_del_caso(contrato, caso)} == "
+                        f"{esperado!r}` (o asigna esa llamada a una variable y "
+                        "compárala); la comparación debe ser una igualdad directa "
+                        "con el resultado, sin len(), índices ni otra transformación."
                     )
                 valores_disponibles.pop(posicion)
                 continue
@@ -127,7 +145,9 @@ class ReglasRevisionPython:
             if posicion is None:
                 return (
                     f"Oráculo inválido: el caso '{caso['id']}' no comprueba "
-                    f"la excepción {excepcion}."
+                    f"la excepción {excepcion}. Corrige esto: usa "
+                    f"`with pytest.raises({excepcion}):` y dentro llama a "
+                    f"`{_llamada_del_caso(contrato, caso)}`."
                 )
             excepciones_disponibles.pop(posicion)
 

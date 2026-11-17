@@ -4,7 +4,7 @@ Solo lee fuentes UTF-8: no importa, compila ni ejecuta el proyecto analizado.
 Extrae clases, constructores, métodos públicos, Javadoc y decisiones (#181). Excluye
 src/test, carpetas generadas y enlaces simbólicos. Resuelve llamadas explícitas
 del proyecto sin inferir tipos ni despacho dinámico. Extrae declaraciones de
-endpoints Spring (#183); no admite sobrecargas. La generación usa el contrato del Planner y el
+endpoints Spring (#183); las sobrecargas quedan fuera con su motivo. La generación usa el contrato del Planner y el
 guardrail valida aserciones sin ejecutar Java ni consultar IA. Lee informes JUnit
 XML y ejecuta Maven/JUnit/JaCoCo y mutación PIT acotada exclusivamente dentro del
 sandbox (#182, #180).
@@ -144,16 +144,36 @@ def _tiene_dependencias_inyectadas(constructores: list[dict[str, Any]]) -> bool:
     return False
 
 
+#: Por qué una sobrecarga no es un objetivo: el contrato identifica `Clase.metodo`.
+MOTIVO_SOBRECARGA = (
+    "hay varias versiones de este método con parámetros distintos y QAgent todavía "
+    "identifica los métodos como Clase.metodo, sin la firma: no puede distinguirlas"
+)
+
+
 def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Clases y métodos públicos que pueden ser objetivos (ver `_declaraciones_java`)."""
+    clases, funciones, _ = _declaraciones_java(raiz)
+    return clases, funciones
+
+
+def _declaraciones_java(
+    raiz: Node,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Extrae clases y métodos públicos, sin entrar en cuerpos de métodos.
 
-    Los constructores se describen dentro de su clase, sin ser objetivos.
-    Rechaza nombres de métodos duplicados por sobrecarga para evitar objetivos
-    ambiguos en el contrato Clase.metodo.
+    Los constructores se describen dentro de su clase, sin ser objetivos. Un método
+    sobrecargado no es objetivo (sería ambiguo en el contrato Clase.metodo), pero no
+    descarta a los demás del archivo: cada declaración que queda fuera se devuelve
+    aparte con su clase, firma, línea y motivo.
+
+    Returns:
+        (clases, métodos que son objetivos, sobrecargas que quedaron fuera).
     """
     clases: list[dict[str, Any]] = []
     funciones: list[dict[str, Any]] = []
-    nombres: set[str] = set()
+    #: Declaraciones públicas por objetivo, también las abstractas (sin cuerpo).
+    declaradas: dict[str, list[dict[str, Any]]] = {}
 
     def visitar(contenedor: Node, prefijo: str = "") -> None:
         for nodo in contenedor.named_children:
@@ -208,13 +228,18 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 )
                 if not publico:
                     continue
-                objetivo = nombre + "." + _texto(metodo.child_by_field_name("name"))
-                if objetivo in nombres:
-                    raise ValueError(
-                        f"Sobrecarga no admitida en el prototipo: {objetivo}"
-                    )
-                nombres.add(objetivo)
+                nombre_metodo = _texto(metodo.child_by_field_name("name")) or ""
+                objetivo = nombre + "." + nombre_metodo
                 parametros = _parametros(metodo)
+                tipos = ", ".join(str(p.get("tipo") or "?") for p in parametros)
+                declaradas.setdefault(objetivo, []).append(
+                    {
+                        "clase": nombre,
+                        "nombre": f"{nombre_metodo}({tipos})",
+                        "linea": metodo.start_point.row + 1,
+                        "motivo": MOTIVO_SOBRECARGA,
+                    }
+                )
                 retorno = _texto(metodo.child_by_field_name("type"))
                 cuerpo_metodo = metodo.child_by_field_name("body")
                 if cuerpo_metodo is None:
@@ -253,7 +278,13 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 )
 
     visitar(raiz)
-    return clases, funciones
+    ambiguos = {objetivo for objetivo, lista in declaradas.items() if len(lista) > 1}
+    sobrecargas = [
+        declaracion for objetivo in ambiguos for declaracion in declaradas[objetivo]
+    ]
+    sobrecargas.sort(key=lambda d: (d["linea"], d["nombre"]))
+    funciones = [f for f in funciones if f["nombre"] not in ambiguos]
+    return clases, funciones, sobrecargas
 
 
 def _constructores(clase: Node, nombre: str) -> list[dict[str, Any]]:
@@ -321,8 +352,9 @@ class JavaAdapter(AdaptadorEnDesarrollo):
         La huella incluye nombre, ruta y fuente completa: cambios de campos,
         imports o métodos auxiliares también invalidan la caché para evitar
         reutilizar un score con un contexto distinto. Es conservadora: incluso
-        un comentario puede forzar otra ejecución. Sintaxis inválida o nombres
-        ambiguos devuelven None; nunca se reutiliza un resultado por conjetura.
+        un comentario puede forzar otra ejecución. Sintaxis inválida devuelve None
+        y un método sobrecargado no recibe huella (no es objetivo): nunca se
+        reutiliza un resultado por conjetura.
         """
         arbol = obtener_parser("java").parse(fuente.encode("utf-8"))
         if arbol.root_node.has_error:
@@ -634,7 +666,7 @@ class JavaAdapter(AdaptadorEnDesarrollo):
                     raise ValueError(
                         "; ".join(extraer_errores_sintaxis(arbol.root_node))
                     )
-                clases, funciones = _declaraciones(arbol.root_node)
+                clases, funciones, sobrecargas = _declaraciones_java(arbol.root_node)
             except (OSError, UnicodeError, ValueError, RecursionError) as error:
                 errores.append(
                     {
@@ -660,6 +692,12 @@ class JavaAdapter(AdaptadorEnDesarrollo):
                     "funciones_excluidas": [
                         f for f in funciones if f.get("dependencias_inyectadas")
                     ],
+                    # Sobrecargas: quedan fuera con su motivo, sin perder el resto.
+                    **(
+                        {"metodos_no_seleccionables": sobrecargas}
+                        if sobrecargas
+                        else {}
+                    ),
                 }
             )
             arboles[relativa] = arbol.root_node

@@ -668,9 +668,19 @@
             }
           }
         },
+        "fase_fallo": {
+          "type": ["string", "null"],
+          "enum": ["planificacion", "generacion", "validacion", "ejecucion", "entorno", "proyecto", null],
+          "description": "Fase en la que se detuvo un objetivo que no quedó aprobado; null si se aprobó o no se procesó. «proyecto»: la prueba corrió y el código no cumplió el contrato; las demás son de QAgent o del entorno."
+        },
+        "controles_no_ejecutados": {
+          "type": "array",
+          "items": {"enum": ["sandbox", "aserciones"]},
+          "description": "Controles con valor null porque la prueba se rechazó antes de ejecutarse (no es «sin dato» ni «no cumple»)."
+        },
         "controles": {
           "type": "object",
-          "description": "HU-21. Checklist del último intento: true cumple, false no cumple, null sin dato o no aplica.",
+          "description": "HU-21. Checklist del último intento: true cumple, false no cumple, null sin dato, no aplica o no ejecutado (ver controles_no_ejecutados).",
           "additionalProperties": false,
           "required": [
             "sintaxis",

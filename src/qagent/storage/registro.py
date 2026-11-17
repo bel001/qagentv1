@@ -517,6 +517,8 @@ def _objetivo(
         "duracion_pytest_s": getattr(objetivo, "duracion_pytest_s", 0.0),
         "tiempos_intentos": getattr(objetivo, "tiempos_intentos", []),
         "controles": controles(objetivo, metas, perfil),  # HU-21
+        "fase_fallo": fase_del_fallo(objetivo),
+        "controles_no_ejecutados": controles_no_ejecutados(objetivo),
         "metricas": {
             "paso": ultima is not None
             and ultima["estado_sandbox"] == "ok"
@@ -608,18 +610,106 @@ def _promedio(objetivos: list[dict[str, Any]], metrica: str) -> float | None:
     return round(sum(valores) / len(valores), 1) if valores else None
 
 
+#: Fases en las que se detiene un objetivo que no queda aprobado. Solo `proyecto`
+#: habla del código del usuario; las demás son de QAgent o del entorno.
+FASE_PLANIFICACION = "planificacion"
+FASE_GENERACION = "generacion"
+FASE_VALIDACION = "validacion"
+FASE_EJECUCION = "ejecucion"
+FASE_ENTORNO = "entorno"
+FASE_PROYECTO = "proyecto"
+#: `motivo_sin_veredicto` del orquestador cuando el Planner no dio un contrato usable.
+_MOTIVOS_PLANIFICACION = frozenset({"error_planner", "error_contrato_planner"})
+#: El proyecto no compila: es del código del usuario, no del entorno.
+_MOTIVO_COMPILACION = "error_compilacion_proyecto"
+_ORACULO_INVALIDO = "Oráculo inválido"
+
+
+def _ultima_revision(objetivo: Any) -> dict[str, Any] | None:
+    revisiones = getattr(objetivo, "revisiones", None)
+    return revisiones[-1] if revisiones else None
+
+
+def _rechazada_sin_ejecutar(ultima: dict[str, Any] | None) -> bool:
+    """Si el último test se rechazó antes de llegar al sandbox.
+
+    El Reviewer agrega `ejecucion` solo a los intentos que se ejecutaron: un rechazo
+    por sintaxis, oráculo o aserciones debilitadas es `error_test` sin `ejecucion`.
+    """
+    return (
+        ultima is not None
+        and ultima.get("tipo_fallo") == "error_test"
+        and not ultima.get("ejecucion")
+    )
+
+
+def fase_del_fallo(objetivo: Any) -> str | None:
+    """Fase en la que se detuvo un objetivo que no quedó aprobado, o None.
+
+    Permite decir dónde falló de verdad: planificar el caso, generar la prueba,
+    validarla antes de ejecutarla, ejecutarla, el entorno, o el código del proyecto.
+    """
+    sin_veredicto = getattr(objetivo, "motivo_sin_veredicto", None)
+    if sin_veredicto in _MOTIVOS_PLANIFICACION:
+        return FASE_PLANIFICACION
+    if getattr(objetivo, "decision", None) == "accept":
+        return None
+    ultima = _ultima_revision(objetivo)
+    if sin_veredicto == _MOTIVO_COMPILACION:
+        return FASE_PROYECTO
+    if ultima is None:
+        if not sin_veredicto:
+            return None  # no se llegó a procesar
+        return FASE_GENERACION if objetivo.codigo is None else FASE_ENTORNO
+    if sin_veredicto:
+        return FASE_ENTORNO
+    if _rechazada_sin_ejecutar(ultima):
+        return FASE_VALIDACION
+    if ultima["estado_sandbox"] in ("timeout", "oom", "error") or str(
+        ultima.get("feedback") or ""
+    ).startswith("Error de entorno"):
+        return FASE_ENTORNO
+    if getattr(objetivo, "decision", None) == "bug_detectado":
+        return FASE_PROYECTO
+    return FASE_EJECUCION
+
+
+def _aserciones_evaluadas(ultima: dict[str, Any]) -> bool:
+    """Si el rechazo previo a la ejecución fue justamente por las aserciones."""
+    return bool(ultima["laundering_detectado"]) or str(
+        ultima.get("feedback") or ""
+    ).startswith(_ORACULO_INVALIDO)
+
+
+def controles_no_ejecutados(objetivo: Any) -> list[str]:
+    """Controles que no llegaron a comprobarse porque la prueba se rechazó antes.
+
+    No es «no cumple» ni «sin dato»: el sandbox no corrió. Las aserciones solo
+    cuentan como comprobadas si el rechazo fue por ellas (oráculo o laundering).
+    """
+    ultima = _ultima_revision(objetivo)
+    if not _rechazada_sin_ejecutar(ultima) or getattr(
+        objetivo, "motivo_sin_veredicto", None
+    ):
+        return []
+    return ["sandbox"] if _aserciones_evaluadas(ultima) else ["sandbox", "aserciones"]
+
+
 def controles(
     objetivo: Any, metas: dict[str, float] | None, perfil: str | None = None
 ) -> dict[str, Any]:
     """Los 5 controles del checklist de una función (HU-21).
 
-    Cada uno es True (cumple), False (no cumple) o None (sin dato o no aplica):
+    Cada uno es True (cumple), False (no cumple) o None (sin dato, no aplica o no
+    ejecutado; `controles_no_ejecutados` dice cuáles son de este último tipo):
 
     - sintaxis: el último test se puede parsear con el adaptador, sin ejecutarlo.
     - sandbox: el último test se ejecutó en el sandbox sin errores de entorno (ni
-      timeout, ni memoria, ni import o colección fallidos).
+      timeout, ni memoria, ni import o colección fallidos). None si el test se
+      rechazó antes de ejecutarse: no corrió, así que no pudo incumplir.
     - aserciones: el último test no debilitó aserciones (laundering) y cada valor
-      esperado es trazable al contrato del Planner.
+      esperado es trazable al contrato del Planner. None si el test se rechazó
+      antes por otra causa (por ejemplo, sintaxis) y no llegaron a revisarse.
     - cobertura: líneas y ramas ≥ la meta (si la función no tiene ramas, solo líneas).
       En Humo (#75) solo líneas: un caso normal no busca cubrir las ramas.
     - mutation: Mutation Score ≥ 60 % en funciones críticas (EN-09); None si la
@@ -632,6 +722,7 @@ def controles(
     lineas, ramas = cobertura.get("lineas"), cobertura.get("ramas")
     score = (getattr(objetivo, "mutacion", None) or {}).get("puntuacion")
     sin_veredicto = getattr(objetivo, "motivo_sin_veredicto", None)
+    no_ejecutados = controles_no_ejecutados(objetivo)
     sintaxis = None
     if objetivo.codigo is not None:
         if (contrato := getattr(objetivo, "contrato", None)) is not None:
@@ -645,14 +736,14 @@ def controles(
     return {
         "sintaxis": sintaxis,
         "sandbox": None
-        if ultima is None
+        if ultima is None or "sandbox" in no_ejecutados
         else ultima["estado_sandbox"] in ("ok", "fallo")
         and ultima["tipo_fallo"] != "error_test"
         and not sin_veredicto,
         "aserciones": None
-        if ultima is None or sin_veredicto
+        if ultima is None or sin_veredicto or "aserciones" in no_ejecutados
         else not ultima["laundering_detectado"]
-        and not ultima["feedback"].startswith("Oráculo inválido"),
+        and not ultima["feedback"].startswith(_ORACULO_INVALIDO),
         "cobertura": None
         if lineas is None
         else lineas >= minimo

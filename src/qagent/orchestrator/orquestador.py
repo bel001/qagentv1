@@ -167,6 +167,36 @@ def contrato_de_integracion(base: Contrato, info: dict[str, Any]) -> Contrato:
     return contrato
 
 
+def modulo_con_faltantes(modulo: dict[str, Any], faltantes: set[str]) -> dict[str, Any]:
+    """El módulo reducido a los objetivos que la spec vigente no tiene.
+
+    Es lo único que se envía al Planner cuando el resto del plan se reutiliza. Una
+    función elegida solo para integrar (`solo_integracion`) se conserva si es la raíz
+    de una integración que falta: su contrato unitario hace falta para derivarla.
+    """
+    integraciones = [
+        i for i in modulo.get("integraciones") or [] if i.get("objetivo") in faltantes
+    ]
+    raices = {i.get("nombre") for i in integraciones}
+    return {
+        **modulo,
+        "funciones": [
+            f
+            for f in modulo.get("funciones") or []
+            if f.get("nombre") in (raices if f.get("solo_integracion") else faltantes)
+        ],
+        "endpoints": [
+            e
+            for e in modulo.get("endpoints") or []
+            if (e.get("objetivo") or e.get("manejador")) in faltantes
+        ],
+        "componentes": [
+            c for c in modulo.get("componentes") or [] if c.get("nombre") in faltantes
+        ],
+        "integraciones": integraciones,
+    }
+
+
 def es_falla_pasajera(error: BaseException) -> bool:
     """True si el error es de tiempo o de red y no del código, el test o la cuenta.
 
@@ -429,12 +459,16 @@ class Orquestador:
         self,
         modulo: dict[str, Any],
         plan_reutilizado: list[Contrato] | None = None,
+        faltantes: set[str] | None = None,
     ) -> PlanModulo:
         """Planifica un módulo sin ejecutar nada: no necesita el sandbox (#148).
 
-        Con un plan vigente de HU-24 valida sus contratos y omite el Planner. Un fallo
-        controlado no se lanza: queda en `PlanModulo.error` para que `ejecutar` lo
-        reporte. Emite el inicio de la corrida del módulo y los eventos del Planner.
+        Con un plan vigente de HU-24 valida sus contratos y omite el Planner. Si además
+        llegan `faltantes` (objetivos elegidos que la spec no tiene), el Planner
+        planifica solo esos y el resto se reutiliza: no se vuelve a pagar el módulo
+        entero. Un fallo controlado no se lanza: queda en `PlanModulo.error` para que
+        `ejecutar` lo reporte. Emite el inicio de la corrida del módulo y los eventos
+        del Planner.
         """
         inicio = self._reloj()
         self._inicio_reloj = inicio
@@ -449,11 +483,12 @@ class Orquestador:
         contratos: list[Contrato] = []
         error: FalloControlado | None = None
         try:
-            contratos = (
-                self._planificar(modulo)
-                if plan_reutilizado is None
-                else self._usar_plan_reutilizado(modulo, plan_reutilizado)
-            )
+            if plan_reutilizado is None:
+                contratos = self._planificar(modulo)
+            elif faltantes:
+                contratos = self._completar_plan(modulo, plan_reutilizado, faltantes)
+            else:
+                contratos = self._usar_plan_reutilizado(modulo, plan_reutilizado)
             adaptador = getattr(self.planner, "adaptador", None)
             bloqueados = {}
             if adaptador is not None:
@@ -689,6 +724,32 @@ class Orquestador:
 
     def _planificar(self, modulo: dict[str, Any]) -> list[Contrato]:
         self._emitir("planner", None, "Planificando módulo")
+        plan = self._derivar_integraciones(modulo, self._planificar_partes(modulo))
+        return self._cerrar_plan(plan)
+
+    def _completar_plan(
+        self, modulo: dict[str, Any], plan: list[Contrato], faltantes: set[str]
+    ) -> list[Contrato]:
+        """Reutiliza los contratos vigentes y pide al Planner solo los que faltan.
+
+        Las integraciones que faltan se derivan del plan completo, así su raíz puede
+        ser un contrato reutilizado o uno recién planificado.
+        """
+        reutilizados = self._usar_plan_reutilizado(modulo, plan, anunciar=False)
+        parcial = modulo_con_faltantes(modulo, faltantes)
+        self._emitir(
+            "planner",
+            None,
+            f"Spec vigente para {len(reutilizados)} objetivo(s): el Planner solo "
+            f"planifica los {len(faltantes)} que faltan",
+        )
+        nuevos = self._planificar_partes(parcial)
+        return self._cerrar_plan(
+            self._derivar_integraciones(parcial, [*reutilizados, *nuevos])
+        )
+
+    def _planificar_partes(self, modulo: dict[str, Any]) -> list[Contrato]:
+        """Funciones, endpoints y componentes del módulo, cada parte por separado."""
         self.tracker.fijar_contexto(None, None)  # el plan es por módulo
         # FIX-02: funciones y endpoints se planifican por separado; si una parte
         # falla de forma recuperable, la otra sigue.
@@ -699,8 +760,10 @@ class Orquestador:
         plan_componentes = self._planificar_parte(
             modulo, "componente", self._planificar_componentes
         )
-        plan = [*plan, *plan_endpoints, *plan_componentes]
-        plan = self._derivar_integraciones(modulo, plan)
+        return [*plan, *plan_endpoints, *plan_componentes]
+
+    def _cerrar_plan(self, plan: list[Contrato]) -> list[Contrato]:
+        """Comprueba que cada contrato tenga objetivo y anuncia el tamaño del plan."""
         for elemento in plan:
             if not isinstance(elemento, dict) or not elemento.get("objetivo"):
                 raise FalloControlado(
@@ -819,7 +882,26 @@ class Orquestador:
                 f"Función omitida: {motivo}",
                 datos={"omitida": True},
             )
+        self._anotar_rechazadas()
         return self._revisar_inferidos(plan)
+
+    def _anotar_rechazadas(self) -> None:
+        """Objetivos cuya respuesta del Planner no sirvió: quedan con el motivo exacto.
+
+        Sin esto aparecían como «sin un caso verificable en su especificación»,
+        cuando lo que falló fue la respuesta del modelo.
+        """
+        rechazadas = getattr(self.planner, "rechazadas", None) or {}
+        for nombre, motivo in rechazadas.items():
+            if nombre in self._motivos_omision:
+                continue
+            self._motivos_omision[nombre] = motivo
+            self._emitir(
+                "planner",
+                nombre,
+                f"Sin plan utilizable: {motivo}",
+                datos={"omitida": True, "respuesta_invalida": True},
+            )
 
     def _revisar_inferidos(self, plan: list[Contrato]) -> list[Contrato]:
         """Pasa por una persona los contratos inferidos, si hay revisor (#275, ADR-016).
@@ -877,6 +959,7 @@ class Orquestador:
             self._emitir("planner", None, f"Aviso: {aviso}")
         for descarte in getattr(self.planner, "descartados", None) or []:
             self._emitir("planner", None, f"Caso descartado: {descarte}")
+        self._anotar_rechazadas()
         return plan
 
     def _planificar_componentes(self, modulo: dict[str, Any]) -> list[Contrato]:
@@ -907,7 +990,7 @@ class Orquestador:
         return plan
 
     def _usar_plan_reutilizado(
-        self, modulo: dict[str, Any], plan: list[Contrato]
+        self, modulo: dict[str, Any], plan: list[Contrato], anunciar: bool = True
     ) -> list[Contrato]:
         """Valida una spec vigente sin llamar al Planner ni registrar tokens."""
         if not isinstance(plan, list) or not plan:
@@ -940,12 +1023,13 @@ class Orquestador:
             if clave in marcas:
                 contrato["critical"] = marcas[clave]
         self.tracker.fijar_contexto(None, None)
-        self._emitir(
-            "planner",
-            None,
-            f"Spec reutilizado: Planner omitido (0 tokens, {len(copia)} objetivo(s))",
-            datos={"objetivos_planificados": len(copia)},
-        )
+        if anunciar:
+            self._emitir(
+                "planner",
+                None,
+                f"Spec reutilizado: Planner omitido (0 tokens, {len(copia)} objetivo(s))",
+                datos={"objetivos_planificados": len(copia)},
+            )
         return copia
 
     def _procesar_objetivo(

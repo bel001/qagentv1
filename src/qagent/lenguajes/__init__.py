@@ -75,6 +75,13 @@ def fuera_de_la_corrida(
     return REGISTRO.fuera_de_la_corrida(raiz, adaptador)
 
 
+def aviso_recorrido_incompleto(raiz: str | os.PathLike[str]) -> str | None:
+    """Aviso si el proyecto supera el tope de archivos del recorrido, o None."""
+    from qagent.lenguajes.registro import aviso_recorrido_incompleto as aviso
+
+    return aviso(raiz)
+
+
 def adaptador_e2e_del_proyecto(raiz: str | os.PathLike[str]) -> LanguageAdapter:
     """Adaptador principal cuando el proyecto admite el humo E2E de #186."""
     return REGISTRO.adaptador_e2e_del_proyecto(raiz)
@@ -100,6 +107,7 @@ __all__ = [
     "adaptador_del_proyecto",
     "adaptador_e2e_del_proyecto",
     "adaptador_para",
+    "aviso_recorrido_incompleto",
     "cargar_gramatica",
     "detectar_declaracion_version",
     "detectar_lenguaje",

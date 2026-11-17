@@ -59,20 +59,23 @@ def test_cambios_de_metodo_o_contexto_invalidan_huella(
 
 
 @pytest.mark.parametrize(
-    "fuente",
+    ("fuente", "huellas"),
     [
-        "public class Rota {",
-        "public class Banco { public int x() { return 1; } public int x(int a) { return a; } }",
+        ("public class Rota {", None),
+        (
+            "public class Banco { public int x() { return 1; } public int x(int a) { return a; } }",
+            {},
+        ),
     ],
 )
 def test_fuentes_invalidas_o_ambiguas_no_se_reutilizan(
-    fuente: str, tmp_path: Path
+    fuente: str, huellas: dict | None, tmp_path: Path
 ) -> None:
-    """Sintaxis inválida y sobrecargas producen None y ninguna ubicación de método."""
+    """Sintaxis inválida da None; una sobrecarga no tiene huella ni ubicación."""
     archivo = tmp_path / "Banco.java"
     archivo.write_text(fuente, encoding="utf-8")
     adaptador = JavaAdapter()
-    assert adaptador.huellas_de_archivo(fuente, "Banco.java") is None
+    assert adaptador.huellas_de_archivo(fuente, "Banco.java") == huellas
     assert adaptador.funciones_de_modulo(tmp_path, "Banco.java") == []
     assert adaptador.funciones_de_modulo(tmp_path, "no-existe.java") == []
 
@@ -83,3 +86,12 @@ def test_ruta_externa_no_se_lee(tmp_path: Path) -> None:
     raiz.mkdir()
     (tmp_path / "Banco.java").write_text(FUENTE, encoding="utf-8")
     assert JavaAdapter().funciones_de_modulo(raiz, "../Banco.java") == []
+
+
+def test_una_sobrecarga_no_quita_la_huella_de_los_demas_metodos() -> None:
+    """Solo el método ambiguo queda sin huella: el resto se puede reutilizar."""
+    fuente = (
+        "public class Banco { public int x() { return 1; } "
+        "public int x(int a) { return a; } public int y() { return 2; } }"
+    )
+    assert list(JavaAdapter().huellas_de_archivo(fuente, "Banco.java")) == ["Banco.y"]

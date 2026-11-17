@@ -26,6 +26,8 @@ si se omiten todas las del módulo, el módulo termina sin objetivos.
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from collections.abc import Callable
 from typing import Any
 
@@ -66,6 +68,48 @@ _CONTRATO_DE_PRUEBA = {
     "firma": "()",
     "critical": False,
 }
+
+
+#: La respuesta del modelo para un objetivo no cumplió el formato del contrato. Es un
+#: fallo de planificación de QAgent, no falta de especificación ni un bug del proyecto.
+MOTIVO_RESPUESTA_INVALIDA = (
+    "el Planner respondió con casos que no cumplen el formato del contrato y no se "
+    "pudo planificar; no es un problema de tu código"
+)
+_ID_DE_CASO = re.compile(r"[a-z0-9_]+")
+_NO_ID = re.compile(r"[^a-z0-9_]+")
+
+
+def id_de_caso_normalizado(valor: Any) -> str | None:
+    """`valor` como id de caso válido (`^[a-z0-9_]+$`), o None si no hay de dónde.
+
+    «404-No encontrado» pasa a «404_no_encontrado». No toca entradas ni resultados
+    esperados: solo la etiqueta del caso.
+    """
+    if isinstance(valor, bool) or not isinstance(valor, (str, int)):
+        return None
+    texto = str(valor)
+    if _ID_DE_CASO.fullmatch(texto):
+        return texto
+    sin_acentos = (
+        unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+    )
+    limpio = _NO_ID.sub("_", sin_acentos.lower()).strip("_")
+    return limpio or None
+
+
+def _clave_de_endpoint(objetivo: str) -> str:
+    """`get  /items/` y `GET /items` son la misma ruta para reconocer un objetivo."""
+    metodo, _, ruta = objetivo.strip().partition(" ")
+    ruta = ruta.strip()
+    if len(ruta) > 1:
+        ruta = ruta.rstrip("/")
+    return f"{metodo.upper()} {ruta}"
+
+
+def _sin_prefijo(nombre: str, motivo: str) -> str:
+    """El motivo sin repetir el nombre del objetivo al principio."""
+    return motivo.removeprefix(f"{nombre}: ")
 
 
 class ErrorRespuestaPlanner(ValueError):
@@ -123,6 +167,10 @@ class PlannerAgent:
         # #138: casos triviales descartados por objetivo en la última llamada.
         self._triviales: dict[str, int] = {}
         self._rechazos: dict[str, list[str]] = {}
+        #: Objetivos que el modelo intentó planificar pero cuya respuesta no cumplió
+        #: el formato del contrato: nombre → motivo exacto. No es falta de
+        #: especificación (eso es `omitidas`), es una respuesta inutilizable.
+        self.rechazadas: dict[str, str] = {}
 
     def _encabezado(self, tipo: str) -> dict[str, Any]:
         """Campos de `planner_contract.v3` que salen del adaptador, no del modelo."""
@@ -159,6 +207,7 @@ class PlannerAgent:
         self.descartados = []
         self.avisos = []
         self.omitidas = {}
+        self.rechazadas = {}
         self._casos_invalidos = 0
         self._triviales = {}
         self._rechazos = {}
@@ -350,9 +399,11 @@ class PlannerAgent:
         if not isinstance(elemento, dict):
             self.descartados.append("un elemento del plan no es un objeto JSON")
             return None
-        nombre = elemento.get("objetivo")
-        if not isinstance(nombre, str) or nombre not in funciones:
-            self.descartados.append(f"objetivo desconocido: {nombre!r}")
+        nombre = self._objetivo_conocido(elemento.get("objetivo"), funciones)
+        if nombre is None:
+            self.descartados.append(
+                f"objetivo desconocido: {elemento.get('objetivo')!r}"
+            )
             return None
         if nombre in vistos:
             self.descartados.append(f"objetivo repetido: {nombre}")
@@ -370,9 +421,66 @@ class PlannerAgent:
                 self._omitir(nombre, funcion)
             else:
                 self.descartados.append(f"{nombre}: sin casos válidos")
+                self._rechazar(nombre, self._rechazos.get(nombre) or [])
             return None
 
         return self._contrato_de_funcion(modulo, nombre, funcion, casos)
+
+    def _rechazar(self, nombre: str, motivos: list[str]) -> None:
+        """Anota por qué la respuesta del modelo para `nombre` no sirvió."""
+        detalle = "; ".join(_sin_prefijo(nombre, m) for m in motivos[:2])
+        self.rechazadas[nombre] = MOTIVO_RESPUESTA_INVALIDA + (
+            f" ({detalle})" if detalle else ""
+        )
+
+    def _objetivo_conocido(
+        self, propuesto: Any, conocidos: dict[str, Any]
+    ) -> str | None:
+        """El objetivo del módulo al que se refiere el modelo, o None.
+
+        Acepta el nombre exacto y, sin adivinar, dos variantes inequívocas: con
+        `()` al final o calificado de más o de menos (`modulo.f` por `f`). Si hay
+        más de una coincidencia, no se elige ninguna.
+        """
+        if not isinstance(propuesto, str):
+            return None
+        if propuesto in conocidos:
+            return propuesto
+        candidato = propuesto.strip().removesuffix("()").strip()
+        if candidato in conocidos:
+            encontrado = candidato
+        else:
+            parecidos = [
+                nombre
+                for nombre in conocidos
+                if candidato
+                and (
+                    nombre.endswith("." + candidato) or candidato.endswith("." + nombre)
+                )
+            ]
+            if len(parecidos) != 1:
+                return None
+            encontrado = parecidos[0]
+        self.avisos.append(
+            f"{encontrado}: el Planner lo nombró {propuesto!r}; se toma como "
+            f"{encontrado!r}"
+        )
+        return encontrado
+
+    def _con_id_valido(self, objetivo: str, caso: dict[str, Any]) -> dict[str, Any]:
+        """El caso con un `id` en el formato del contrato (minúsculas, números y _).
+
+        El id es solo una etiqueta: corregir su formato no cambia qué se prueba ni
+        el resultado esperado, y evita descartar un caso válido por un guion.
+        """
+        corregido = id_de_caso_normalizado(caso.get("id"))
+        if corregido is None or corregido == caso.get("id"):
+            return caso
+        self.avisos.append(
+            f"{objetivo}: el id de caso {caso.get('id')!r} no tenía el formato del "
+            f"contrato; se usa {corregido!r}"
+        )
+        return {**caso, "id": corregido}
 
     def _contrato_de_funcion(
         self,
@@ -561,6 +669,7 @@ class PlannerAgent:
                 self._casos_invalidos += 1
                 self.descartados.append(f"{nombre}: un caso no es un objeto JSON")
                 continue
+            caso = self._con_id_valido(nombre, caso)
             caso = self.reglas.preparar_caso(funcion or {}, caso)
             if any(caso.get("id") == previo["id"] for previo in validos):
                 self._casos_invalidos += 1
@@ -670,6 +779,7 @@ class PlannerAgent:
         self.avisos = []
         endpoints: dict[str, dict[str, Any]] = {}
         self.omitidas = {}
+        self.rechazadas = {}
         for endpoint in modulo.get("endpoints", []):
             objetivo = endpoint.get("objetivo")
             motivo = self.adaptador.motivo_endpoint_no_planificable(endpoint)
@@ -709,9 +819,11 @@ class PlannerAgent:
             if not isinstance(elemento, dict):
                 self.descartados.append("un elemento del plan no es un objeto JSON")
                 continue
-            objetivo = elemento.get("objetivo")
-            if not isinstance(objetivo, str) or objetivo not in endpoints:
-                self.descartados.append(f"endpoint desconocido: {objetivo!r}")
+            objetivo = self._endpoint_conocido(elemento.get("objetivo"), endpoints)
+            if objetivo is None:
+                self.descartados.append(
+                    f"endpoint desconocido: {elemento.get('objetivo')!r}"
+                )
                 continue
             if any(c["objetivo"] == objetivo for c in plan):
                 self.descartados.append(f"endpoint repetido: {objetivo}")
@@ -737,7 +849,43 @@ class PlannerAgent:
             raise ErrorRespuestaPlanner(
                 f"El Planner no produjo ningún contrato de endpoint válido ({detalle})."
             )
+        # Un endpoint cuya respuesta no sirvió no descarta a los demás: queda fuera
+        # con el motivo exacto, no como «sin especificación».
+        planificados = {c["objetivo"] for c in plan}
+        for objetivo in endpoints:
+            motivos = [d for d in self.descartados if d.startswith(f"{objetivo}: ")]
+            if objetivo not in planificados and motivos:
+                self._rechazar(objetivo, motivos)
         return plan
+
+    def _endpoint_conocido(
+        self, propuesto: Any, endpoints: dict[str, dict[str, Any]]
+    ) -> str | None:
+        """El endpoint del módulo al que se refiere el modelo, o None.
+
+        Acepta el objetivo exacto (`GET /ruta`) y, sin adivinar, variantes
+        inequívocas: otro uso de mayúsculas o espacios en el método, una barra final
+        de más, o el nombre del manejador cuando atiende una sola ruta.
+        """
+        if not isinstance(propuesto, str):
+            return None
+        if propuesto in endpoints:
+            return propuesto
+        clave = _clave_de_endpoint(propuesto)
+        parecidos = [o for o in endpoints if _clave_de_endpoint(o) == clave]
+        if len(parecidos) != 1:
+            parecidos = [
+                o
+                for o, e in endpoints.items()
+                if e.get("manejador") == propuesto.strip().removesuffix("()")
+            ]
+        if len(parecidos) != 1:
+            return None
+        self.avisos.append(
+            f"{parecidos[0]}: el Planner lo nombró {propuesto!r}; se toma como "
+            f"{parecidos[0]!r}"
+        )
+        return parecidos[0]
 
     def _contrato_endpoint(
         self,
@@ -766,6 +914,7 @@ class PlannerAgent:
             if not isinstance(caso, dict):
                 self.descartados.append(f"{objetivo}: un caso no es un objeto JSON")
                 continue
+            caso = self._con_id_valido(objetivo, caso)
             if any(caso.get("id") == previo["id"] for previo in validos):
                 self.descartados.append(f"{objetivo}: caso repetido {caso.get('id')!r}")
                 continue

@@ -183,6 +183,9 @@ class _ModuloPreparado:
     plan_guardado: dict[str, Any] | None
     perfiles: dict[str, str]
     completos: dict[str, dict[str, Any]]
+    #: Objetivos cuyo contrato salió de la spec vigente cuando el resto se planificó
+    #: en esta corrida; vacío si se reutilizó o se planificó el módulo entero.
+    reutilizados: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

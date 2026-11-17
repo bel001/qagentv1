@@ -46,6 +46,7 @@ from qagent.lenguajes import (
     LenguajeNoSoportado,
     adaptador_del_proyecto,
     adaptador_e2e_del_proyecto,
+    aviso_recorrido_incompleto,
     fuera_de_la_corrida,
 )
 from qagent.llm.tracker import TokenTracker
@@ -339,6 +340,8 @@ def generar_vista_previa(
         "framework_ui": resultado_ast.get("framework_ui"),
         # EP-11: con .js y .ts juntos, los archivos del lenguaje no elegido se avisan.
         "fuera_de_la_corrida": fuera_de_la_corrida(carpeta, adaptador),
+        # Más archivos que el tope del recorrido: la exploración es parcial y se dice.
+        "recorrido_incompleto": aviso_recorrido_incompleto(carpeta),
         "avisos": {
             "oraculo_debil": AVISO_ORACULO_DEBIL,
             "falta_docstring": ETIQUETA_FALTA_DOCSTRING,

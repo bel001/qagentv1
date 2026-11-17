@@ -13,6 +13,7 @@ from qagent.lenguajes import (
     LenguajeNoSoportado,
     VersionPythonNoSoportada,
     adaptador_del_proyecto,
+    aviso_recorrido_incompleto,
     fuera_de_la_corrida,
 )
 from qagent.llm import TokenTracker
@@ -142,6 +143,8 @@ def _analizar_entrada(
     fuera = fuera_de_la_corrida(ruta, adaptador)
     for aviso in fuera:
         avisar(aviso["mensaje"], "aviso")
+    if incompleto := aviso_recorrido_incompleto(ruta):
+        avisar(incompleto, "aviso")
     tipos = list(tipos)
     if n_endpoints:
         tipos = ["funcion", "endpoint"] if n_funciones else ["endpoint"]
@@ -437,6 +440,7 @@ def _preparar_modulo(
     completos: dict[str, dict[str, Any]] = {}
     faltan: set[str] = set()
     de_humo: set[str] = set()
+    reutilizados: frozenset[str] = frozenset()
     if plan_guardado is not None:
         objetivos = _objetivos_de(modulo)
         elegidos = [c for c in plan_guardado["contratos"] if c["objetivo"] in objetivos]
@@ -463,6 +467,19 @@ def _preparar_modulo(
             archivo=modulo["ruta"],
         )
         plan = orquestador.planificar(modulo, plan_reutilizado=elegidos)
+    elif plan_guardado is not None and elegidos:
+        # La spec sirve para parte de lo elegido: el Planner solo planifica lo que
+        # falta, en vez de volver a pagar el módulo entero.
+        accion = "regenerado"
+        reutilizados = frozenset(c["objetivo"] for c in elegidos)
+        avisar(
+            f"Spec vigente para {len(elegidos)} objetivo(s): solo se planifican "
+            f"los {len(faltan)} que faltan",
+            archivo=modulo["ruta"],
+        )
+        plan = orquestador.planificar(
+            modulo, plan_reutilizado=elegidos, faltantes=faltan
+        )
     else:
         accion = "regenerado" if habia_spec else "generado"
         if de_humo:
@@ -483,4 +500,6 @@ def _preparar_modulo(
                 archivo=modulo["ruta"],
             )
         plan = orquestador.planificar(modulo)
-    return _ModuloPreparado(plan, accion, plan_guardado, perfiles, completos)
+    return _ModuloPreparado(
+        plan, accion, plan_guardado, perfiles, completos, reutilizados
+    )

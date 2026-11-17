@@ -107,10 +107,12 @@ registrarComponente('vista-previa/vista-previa', `<!-- ===== 2. EXPLORAR ===== -
           </table></div>
         </div>
         <p class="exp-pie"><span id="expMostrando"></span><span id="footMsg"></span><span id="expCambios"></span></p>
+        <p class="exp-pie exp-mas-filas" id="expMasFilas" hidden><span id="expMasFilasTxt"></span><button type="button" class="ini-btn" onclick="mostrarMasFilas()">Mostrar más</button></p>
       </section>
     </div>
 
     <!-- EP-11: archivos de JS o TS que no prueba esta corrida -->
+    <div class="np-aviso np-aviso-aviso exp-errores hide" id="expParcial" role="status">${ICO_AVISO_EXP}<div><b>Exploración parcial del proyecto</b><div id="expParcialTxt"></div></div></div>
     <div class="np-aviso np-aviso-aviso exp-errores hide" id="expFuera">${ICO_AVISO_EXP}<div><b id="expFueraTitulo"></b><div id="expFueraLista"></div></div></div>
 
     <!-- Archivos que no se pudieron leer -->
@@ -142,11 +144,16 @@ const TIPOS_PROXIMAMENTE = {
 // Vista de objetivos activa: 'funciones' (por defecto) o 'endpoints' (issue #66).
 let VISTA_OBJETIVOS = 'funciones';
 let BUSQUEDA = '';   // texto del buscador de la tabla, en minúsculas
+// En un proyecto grande hay miles de objetivos: dibujarlos todos en cada clic congela la
+// ventana. La tabla dibuja por tandas; la selección y las cifras cuentan siempre todo.
+const FILAS_POR_TANDA = 300;
+let FILAS_VISIBLES = FILAS_POR_TANDA;
 
 // Al cargar otro proyecto, la tabla vuelve a Funciones y sin búsqueda.
 function reiniciarVistaExplorar() {
   VISTA_OBJETIVOS = 'funciones';
   BUSQUEDA = '';
+  FILAS_VISIBLES = FILAS_POR_TANDA;
   $('expBuscar').value = '';
 }
 
@@ -221,6 +228,9 @@ function cargarDatosVistaPrevia(res) {
   PROYECTO_RESUMEN = res.resumen;
   PROYECTO_ERRORES = res.errores || [];
   renderFueraDeLaCorrida(res.fuera_de_la_corrida || []);
+  // Proyecto con más archivos que el tope del recorrido: se avisa que falta revisar parte.
+  $('expParcial').classList.toggle('hide', !res.recorrido_incompleto);
+  $('expParcialTxt').textContent = res.recorrido_incompleto || '';
   RECOMENDACION = res.recomendacion ? {recomendacion: res.recomendacion, proximamente: res.proximamente || []} : null;
   RECO_IA_PENDIENTE = !!res.recomendacion_ia_pendiente;
   renderRecomendacion();
@@ -573,7 +583,7 @@ function renderOrientacionPruebas(datos){
   $('expOrientacionResumen').textContent = `${r.recomendada || 0} recomendadas · ${r.revisar || 0} para revisar · ${r.no_soportada || 0} fuera del soporte. Tú decides cuáles incluir.`;
   $('expAplicarObjetivos').disabled=!(r.recomendada > 0);
   const metodos=datos.metodos_no_seleccionables || [];
-  $('expMetodosNoDisponibles').innerHTML = metodos.length ? `<details><summary>${metodos.length} ${metodos.length === 1 ? 'método dentro de una clase todavía no seleccionable' : 'métodos dentro de clases todavía no seleccionables'}</summary><p>La lógica puede estar en estos métodos. Probar una fábrica que devuelve el servicio no comprueba sus métodos.</p><ul>${metodos.map(m=>`<li>${escHtml(m.modulo)} · ${escHtml(m.clase)}.${escHtml(m.nombre)}</li>`).join('')}</ul></details>` : '';
+  $('expMetodosNoDisponibles').innerHTML = metodos.length ? `<details><summary>${metodos.length} ${metodos.length === 1 ? 'método dentro de una clase todavía no seleccionable' : 'métodos dentro de clases todavía no seleccionables'}</summary><p>La lógica puede estar en estos métodos. Probar una fábrica que devuelve el servicio no comprueba sus métodos.</p><ul>${metodos.map(m=>`<li>${escHtml(m.modulo)} · ${escHtml(m.clase)}.${escHtml(m.nombre)}${m.motivo ? ' — ' + escHtml(m.motivo) : ''}</li>`).join('')}</ul></details>` : '';
 }
 
 function aplicarSeleccionRecomendada(){
@@ -803,6 +813,11 @@ function renderErroresLectura(){
 // Filtra funciones y endpoints por nombre, ruta o archivo. No cambia la selección.
 function buscarObjetivos(texto){
   BUSQUEDA = String(texto || '').trim().toLowerCase();
+  FILAS_VISIBLES = FILAS_POR_TANDA;
+  renderFns();
+}
+function mostrarMasFilas(){
+  FILAS_VISIBLES += FILAS_POR_TANDA;
   renderFns();
 }
 const coincide = (...campos) => !BUSQUEDA || campos.some(c => String(c || '').toLowerCase().includes(BUSQUEDA));
@@ -905,7 +920,7 @@ const endpointVisible = r => coincide(r.e.objetivo, r.e.ruta, r.e.manejador, r.m
 
 function renderEndpoints(){
   const filas = filasEndpoints().filter(endpointVisible);
-  $('endpointTable').innerHTML = filas.map(({m, mi, e, ei}) => {
+  $('endpointTable').innerHTML = filas.slice(0, FILAS_VISIBLES).map(({m, mi, e, ei}) => {
     const elegible = endpointElegible(e);
     const nombreEp = escHtml(e.objetivo || e.manejador || '');
     // Detalle del contrato del endpoint, como descripción emergente del nombre.
@@ -929,7 +944,7 @@ function renderEndpoints(){
 function renderFns(){
   const fns = filasFunciones(), eps = filasEndpoints();
   const fnsVis = fns.filter(funcionVisible);
-  $('fnTable').innerHTML = fnsVis.map(({m, mi, f, fi}) => `<tr>
+  $('fnTable').innerHTML = fnsVis.slice(0, FILAS_VISIBLES).map(({m, mi, f, fi}) => `<tr>
       <td class="col-incl"><input type="checkbox" class="exp-caja" aria-label="Incluir función: ${escHtml(f.n)}" ${f.inc ? 'checked' : ''} ${f.noSoportada ? `disabled title="${escHtml(f.noSoportada)}"` : ''} onchange="toggle(${mi},${fi},'inc')"></td>
       <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${!f.noSoportada && tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div>${f.noSoportada ? `<div class="sub" role="note">Fuera del alcance: ${escHtml(f.noSoportada)}</div>` : f.orientacion ? `<div class="sub" role="note"><b>${f.orientacion.categoria === 'recomendada' ? 'Recomendada para empezar' : 'Revisar antes de usar IA'}</b> · ${escHtml(f.orientacion.motivo)}</div>` : ''}</td>
       <td>${textoComplejidad(f.br)}</td>
@@ -963,6 +978,9 @@ function renderFns(){
   const fueraDeCarpetas = Math.max(0, (esFns ? totalFuncionesDetectadas() : totalEndpointsDetectados()) - vistaTodas.length);
   $('expMostrando').textContent = `Mostrando ${vistaVisibles.length} de ${vistaTodas.length} en las carpetas incluidas`
     + (fueraDeCarpetas ? ` · ${fueraDeCarpetas} más en carpetas no incluidas` : '');
+  const sinDibujar = vistaVisibles.length - FILAS_VISIBLES;
+  $('expMasFilas').hidden = sinDibujar <= 0;
+  if(sinDibujar > 0) $('expMasFilasTxt').textContent = `La tabla muestra las primeras ${FILAS_VISIBLES}; quedan ${sinDibujar} sin dibujar. La selección las incluye a todas: usa la búsqueda para encontrar una. `;
   const sinCambios = vistaVisibles.filter(r => SPEC_STATUS[r.m.path] === 'reuse').length;
   const cambiaron = vistaVisibles.filter(r => SPEC_STATUS[r.m.path] === 'stale').length;
   $('expCambios').textContent = (sinCambios || cambiaron) ? ` · ${sinCambios} sin cambios, ${cambiaron} cambiaron` : '';

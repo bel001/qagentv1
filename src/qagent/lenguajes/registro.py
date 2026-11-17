@@ -31,10 +31,24 @@ CARPETAS_IGNORADAS = DIRECTORIOS_IGNORADOS | {
 MAX_ARCHIVOS_DETECCION = 20_000
 
 
-def listar_archivos(raiz: str | os.PathLike[str]) -> list[str]:
+class ListaArchivos(list[str]):
+    """Archivos de un recorrido; ``truncada`` dice si se cortó por el tope.
+
+    Es una lista corriente para quien solo la recorre. Quien presenta el resultado
+    (Vista previa, corrida) mira ``truncada`` para no dar por completa una
+    exploración parcial.
+    """
+
+    truncada: bool = False
+
+
+def listar_archivos(raiz: str | os.PathLike[str]) -> ListaArchivos:
     """Rutas relativas (POSIX) de los archivos del proyecto, sin carpetas ignoradas.
 
-    No sigue enlaces simbólicos ni entra en carpetas ocultas.
+    No sigue enlaces simbólicos ni entra en carpetas ocultas. El recorrido es
+    determinista (carpetas y archivos en orden alfabético): si se corta en
+    ``MAX_ARCHIVOS_DETECCION``, deja siempre los mismos archivos y lo indica en
+    ``truncada``.
 
     Raises:
         NotADirectoryError: si ``raiz`` no es una carpeta.
@@ -42,21 +56,47 @@ def listar_archivos(raiz: str | os.PathLike[str]) -> list[str]:
     carpeta = Path(raiz)
     if not carpeta.is_dir():
         raise NotADirectoryError(f"No es una carpeta: {carpeta}")
-    encontrados: list[str] = []
+    encontrados = ListaArchivos()
     for directorio, subdirectorios, archivos in os.walk(carpeta):
-        subdirectorios[:] = [
+        subdirectorios[:] = sorted(
             d
             for d in subdirectorios
             if not d.startswith(".")
             and d not in CARPETAS_IGNORADAS
             and not d.endswith(".egg-info")
-        ]
+        )
         base = Path(directorio).relative_to(carpeta)
-        for nombre in archivos:
-            encontrados.append((base / nombre).as_posix())
+        for nombre in sorted(archivos):
             if len(encontrados) >= MAX_ARCHIVOS_DETECCION:
-                return sorted(encontrados)
-    return sorted(encontrados)
+                encontrados.truncada = True
+                break
+            encontrados.append((base / nombre).as_posix())
+        if encontrados.truncada:
+            break
+    encontrados.sort()
+    return encontrados
+
+
+def aviso_recorrido_incompleto(raiz: str | os.PathLike[str]) -> str | None:
+    """Aviso para la persona si el proyecto supera el tope del recorrido, o None.
+
+    Con más de ``MAX_ARCHIVOS_DETECCION`` archivos solo se mira una parte: el
+    lenguaje detectado y los archivos listados pueden no ser todos.
+    """
+    try:
+        truncada = listar_archivos(raiz).truncada
+    except (OSError, NotADirectoryError):
+        return None
+    if not truncada:
+        return None
+    return (
+        f"El proyecto tiene más de {MAX_ARCHIVOS_DETECCION:,} archivos".replace(
+            ",", "."
+        )
+        + ": QAgent revisó solo los primeros (en orden alfabético de carpetas), así "
+        "que la exploración es parcial y puede faltar código. Para revisarlo entero, "
+        "abre cada módulo o subcarpeta como un proyecto aparte."
+    )
 
 
 class LenguajeNoSoportado(RuntimeError):
