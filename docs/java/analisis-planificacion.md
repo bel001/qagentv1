@@ -36,8 +36,16 @@ ni lambdas. El conteo describe sintaxis, no cobertura de ejecución.
 que sus constructores privados se registran dentro de las clases.
 
 Se mantienen las exclusiones de `target/`, `build/`, `src/test/`, carpetas ocultas
-y enlaces simbólicos. Las sobrecargas de métodos públicos siguen rechazándose
-con un diagnóstico explícito para evitar objetivos `Clase.metodo` ambiguos.
+y enlaces simbólicos. Un método sobrecargado se identifica con los tipos de sus
+parámetros, `Clase.metodo(String,int)`: nombre simple, sin genéricos y con `[]`
+para arrays y varargs (backlog 2, `lenguajes/java_identidad.py`). Los métodos sin
+sobrecarga conservan `Clase.metodo`, así las specs, pruebas y huellas guardadas
+siguen valiendo. Si dos versiones quedan con la misma identidad (tipos con el
+mismo nombre simple en paquetes distintos), ninguna es objetivo y ambas se
+listan con su motivo. En una sobrecarga, el validador exige que cada argumento
+sea el literal exacto de su tipo (`1L` para `long`, `1.0f` para `float`) para que
+Java llame a esa versión y no a otra. PIT filtra por nombre de método, así que no
+muta una sola versión de un método sobrecargado y lo dice antes de ejecutar.
 
 ## Validación del primer bloque
 
@@ -108,8 +116,9 @@ estar documentada en @throws/@exception con sus condiciones.
 
 Las entradas son objetos por nombre de parámetro o listas posicionales; []
 representa una llamada sin argumentos. Los arrays se representan con listas.
-Para varargs se admite una lista posicional expandida o una lista bajo el nombre
-del último parámetro. Se comprueban rangos de enteros, números finitos,
+Un método con varargs se omite antes de planificar, con su motivo: el validador
+de pruebas todavía necesita parámetros fijos y rechazaba siempre esas pruebas
+después de gastar tokens (backlog 17; su soporte es parte del backlog 14). Se comprueban rangos de enteros, números finitos,
 booleanos, strings, char (una unidad UTF-16), arrays y colecciones reconocidas.
 Los tipos propios o genéricos no resueltos requieren la especificación funcional;
 no se afirma haber comprobado todas sus reglas de construcción.

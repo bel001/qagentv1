@@ -130,7 +130,7 @@
       },
       "then": {
         "properties": {
-          "objetivo": { "$ref": "#/$defs/nombre_calificado" },
+          "objetivo": { "$ref": "#/$defs/objetivo_metodo" },
           "casos": {
             "items": { "not": { "required": ["tipo_valor_esperado"] } }
           }
@@ -188,6 +188,11 @@
     "identificador_python": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "objetivo_metodo": {
+      "type": "string",
+      "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*(\\(([A-Za-z_$][A-Za-z0-9_$]*(\\[\\])*(,[A-Za-z_$][A-Za-z0-9_$]*(\\[\\])*)*)?\\))?$",
+      "description": "Clase.metodo, o Clase.metodo(T1,T2) si el método está sobrecargado (backlog 2): tipos con su nombre simple, sin genéricos y con [] para arrays y varargs."
     },
     "nombre_calificado": {
       "type": "string",

@@ -107,6 +107,7 @@
 
 /* Pie de la tabla y aviso de archivos que no se pudieron leer */
 .exp-pie{color:var(--texto-2);font-size:var(--texto-meta)}
+.exp-compat-requisitos{display:flex;flex-direction:column;gap:var(--esp-1)}
 .exp-mas-filas:not([hidden]){display:flex;align-items:center;gap:var(--esp-3);flex-wrap:wrap}
 .exp-errores{align-items:center}
 .exp-errores #expErroresLista{display:flex;flex-direction:column;gap:var(--esp-1);margin-top:var(--esp-1)}

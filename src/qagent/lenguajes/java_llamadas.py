@@ -42,6 +42,22 @@ class _Clase:
         return f"{self.paquete}.{self.nombre}" if self.paquete else self.nombre
 
 
+def _declaraciones_de(clase: _Clase, objetivo: str) -> list[Node]:
+    """Declaraciones del método del objetivo; una sola si es una sobrecarga (backlog 2).
+
+    ``Clase.metodo(String,int)`` elige la declaración con esos tipos; sin firma, todas
+    las que se llamen así (si son varias, el llamador no conjetura cuál).
+    """
+    from qagent.lenguajes.java import _parametros
+    from qagent.lenguajes.java_identidad import base_de, es_sobrecarga, identidad
+
+    base = base_de(objetivo)
+    declaraciones = clase.metodos.get(base.rsplit(".", 1)[-1], [])
+    if not es_sobrecarga(objetivo):
+        return declaraciones
+    return [d for d in declaraciones if identidad(base, _parametros(d)) == objetivo]
+
+
 def agregar_llamadas(modulos: list[dict[str, Any]], arboles: dict[str, Node]) -> None:
     """Añade llama_a con el formato común ruta/Clase.java::Clase.metodo.
 
@@ -88,7 +104,7 @@ def agregar_llamadas(modulos: list[dict[str, Any]], arboles: dict[str, Node]) ->
         imports, estaticos = _imports(arboles[modulo["ruta"]])
         for funcion in modulo["funciones"]:
             clase = clases[(modulo["ruta"], funcion["clase"])]
-            declaraciones = clase.metodos[funcion["nombre"].rsplit(".", 1)[-1]]
+            declaraciones = _declaraciones_de(clase, funcion["nombre"])
             funcion["llama_a"] = []
             if len(declaraciones) != 1:
                 continue

@@ -176,8 +176,10 @@ def test_excluye_pruebas_y_compilados(tmp_path: Path) -> None:
     assert JavaAdapter().analizar(tmp_path)["modulos"] == []
 
 
-def test_reporta_sobrecargas_sin_objetivos_ambiguos(tmp_path: Path) -> None:
-    """Las sobrecargas no son objetivos, y cada una se identifica con su motivo."""
+def test_cada_sobrecarga_es_un_objetivo_identificado_por_su_firma(
+    tmp_path: Path,
+) -> None:
+    """Backlog 2: `Clase.metodo(T1,T2)` distingue las versiones de un método."""
     (tmp_path / "Sobrecarga.java").write_text(
         "class A { public void f() {} public void f(int x) {} }",
         encoding="utf-8",
@@ -185,26 +187,21 @@ def test_reporta_sobrecargas_sin_objetivos_ambiguos(tmp_path: Path) -> None:
     estructura = JavaAdapter().analizar(tmp_path)
     assert estructura["errores"] == []
     [modulo] = estructura["modulos"]
-    assert modulo["funciones"] == []
-    assert [
-        (m["clase"], m["nombre"], m["linea"])
-        for m in modulo["metodos_no_seleccionables"]
-    ] == [("A", "f()", 1), ("A", "f(int)", 1)]
-    assert all(
-        "Clase.metodo" in m["motivo"] for m in modulo["metodos_no_seleccionables"]
-    )
+    assert [f["nombre"] for f in modulo["funciones"]] == ["A.f()", "A.f(int)"]
+    assert "metodos_no_seleccionables" not in modulo
 
 
-def test_una_sobrecarga_no_descarta_los_demas_metodos_del_archivo(
+def test_una_sobrecarga_no_cambia_la_identidad_de_los_demas_metodos(
     tmp_path: Path,
 ) -> None:
-    """Antes, una sola sobrecarga rechazaba el archivo entero (97 en Commons Lang)."""
+    """Los métodos sin sobrecarga conservan `Clase.metodo`: los datos guardados valen."""
     (tmp_path / "Texto.java").write_text(
         "public class Texto {\n"
         "  public static String recortar(String s) { return s.trim(); }\n"
         "  public static int largo(String s) { return s.length(); }\n"
         "  public static int largo(String s, int tope) { return Math.min(s.length(), tope); }\n"
-        "  public static boolean vacio(String s) { return s.isEmpty(); }\n"
+        "  public static boolean vacio(java.util.List<String> s) { return s.isEmpty(); }\n"
+        "  public static int largo(char[]... partes) { return 0; }\n"
         "  static class Interna { public int doble(int x) { return x * 2; } }\n"
         "}\n",
         encoding="utf-8",
@@ -216,12 +213,34 @@ def test_una_sobrecarga_no_descarta_los_demas_metodos_del_archivo(
     assert [f["nombre"] for f in modulo["funciones"]] == [
         "Texto.Interna.doble",
         "Texto.recortar",
+        "Texto.largo(String)",
+        "Texto.largo(String,int)",
         "Texto.vacio",
+        "Texto.largo(char[][])",
     ]
-    assert [(m["nombre"], m["linea"]) for m in modulo["metodos_no_seleccionables"]] == [
-        ("largo(String)", 3),
-        ("largo(String, int)", 4),
+
+
+def test_sobrecargas_que_no_se_pueden_distinguir_quedan_fuera_con_su_motivo(
+    tmp_path: Path,
+) -> None:
+    """Tipos con el mismo nombre simple en paquetes distintos: no se adivina."""
+    (tmp_path / "Listas.java").write_text(
+        "class Listas {\n"
+        "  public int f(java.util.List<String> a) { return 0; }\n"
+        "  public int f(java.awt.List a) { return 1; }\n"
+        "  public int g() { return 2; }\n"
+        "}\n",
+        encoding="utf-8",
+    )
+    [modulo] = JavaAdapter().analizar(tmp_path)["modulos"]
+
+    assert [f["nombre"] for f in modulo["funciones"]] == ["Listas.g"]
+    fuera = modulo["metodos_no_seleccionables"]
+    assert [(m["nombre"], m["linea"]) for m in fuera] == [
+        ("f(java.util.List<String>)", 2),
+        ("f(java.awt.List)", 3),
     ]
+    assert all("paquetes distintos" in m["motivo"] for m in fuera)
 
 
 def test_sin_sobrecargas_el_modulo_no_lleva_metodos_no_seleccionables(

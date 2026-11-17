@@ -23,6 +23,12 @@ from qagent.lenguajes.java_aserciones import (
     resolver,
     texto,
 )
+from qagent.lenguajes.java_identidad import (
+    base_de,
+    es_sobrecarga,
+    literal_del_tipo,
+    literal_esperado,
+)
 from qagent.lenguajes.treesitter import obtener_parser
 
 #: Tipos de texto sin `equals` por contenido contra un String: su resultado se compara
@@ -58,7 +64,8 @@ def _validar(contrato, analisis, contexto):
         return "el test no contiene aserciones JUnit verificables."
     if any(n.type == "field_declaration" for n in nodos(analisis.raiz)):
         return "usa variables locales estables; los campos de la prueba no son oráculos demostrables."
-    clase, metodo = contrato["objetivo"].rsplit(".", 1)
+    clase, metodo = base_de(contrato["objetivo"]).rsplit(".", 1)
+    sobrecarga = es_sobrecarga(contrato["objetivo"])
     clase_test = "_".join(clase.split(".")) + "Test"
     clases = [n for n in analisis.raiz.named_children if n.type == "class_declaration"]
     if len(clases) != 1 or texto(clases[0].child_by_field_name("name")) != clase_test:
@@ -73,6 +80,7 @@ def _validar(contrato, analisis, contexto):
     if len(analisis.aserciones) != len(contrato["casos"]):
         return "debe haber una aserción del contrato por caso, sin aserciones ajenas o tautologías."
     parametros, es_static, retorno = _firma(contrato["firma"])
+    tipos = _tipos_de_firma(contrato["firma"])
     disponibles = list(analisis.aserciones)
     usados: set[int] = set()
     for caso in contrato["casos"]:
@@ -86,6 +94,7 @@ def _validar(contrato, analisis, contexto):
             retorno,
             contexto,
             usados,
+            tipos if sobrecarga else None,
         )
         if problema:
             return problema
@@ -121,8 +130,13 @@ def _validar_caso(
     retorno: str,
     contexto,
     usados: set[int],
+    tipos_sobrecarga: list[str] | None = None,
 ) -> str | None:
-    """Busca y consume la aserción que demuestra un caso del contrato."""
+    """Busca y consume la aserción que demuestra un caso del contrato.
+
+    Con ``tipos_sobrecarga`` (el método está sobrecargado) cada argumento debe ser el
+    literal exacto de su tipo, para que Java llame a esta versión y no a otra.
+    """
     entrada = caso.get("entrada")
     if isinstance(entrada, dict):
         if set(entrada) != set(parametros):
@@ -146,6 +160,7 @@ def _validar_caso(
         contexto,
         usados,
         pistas,
+        tipos_sobrecarga,
     )
     if problema:
         return problema
@@ -176,6 +191,7 @@ def _buscar_asercion(
     contexto,
     usados: set[int],
     pistas: list[tuple[int, str]] | None = None,
+    tipos_sobrecarga: list[str] | None = None,
 ) -> tuple[int | None, str | None]:
     """Devuelve el índice de la aserción del caso y el problema de constructor, si hay.
 
@@ -247,11 +263,53 @@ def _buscar_asercion(
         ):
             pistas.append((2, _pista_argumentos(asercion, args, esperados, caso)))
             continue
+        if tipos_sobrecarga is not None:
+            pista = _pista_literales(asercion, args, tipos_sobrecarga, metodo)
+            if pista is not None:
+                pistas.append((2, pista))
+                continue
         if not _comprueba(asercion, caso, retorno):
             pistas.append((3, _pista_comprobacion(asercion, caso, retorno)))
             continue
         return indice, None
     return None, None
+
+
+def _tipos_de_firma(firma: str) -> list[str]:
+    """Tipos de los parámetros de la firma del contrato, en orden."""
+    raiz = (
+        obtener_parser("java")
+        .parse(("class Contexto { " + firma + " {} }").encode("utf-8"))
+        .root_node
+    )
+    metodo = next((n for n in nodos(raiz) if n.type == "method_declaration"), None)
+    if metodo is None:
+        return []
+    parametros = metodo.child_by_field_name("parameters")
+    return [
+        texto(p.child_by_field_name("type"))
+        for p in (parametros.named_children if parametros is not None else [])
+        if p.child_by_field_name("type") is not None
+    ]
+
+
+def _pista_literales(
+    asercion: AsercionJava, args: list[Node], tipos: list[str], metodo: str
+) -> str | None:
+    """En una sobrecarga, el argumento cuyo literal no es del tipo de esa versión."""
+    for posicion, (argumento, tipo) in enumerate(zip(args, tipos, strict=False), 1):
+        nodo = resolver(argumento, asercion.alias)
+        if nodo.type == "unary_expression":
+            nodo = nodo.child_by_field_name("operand") or nodo
+        if literal_del_tipo(nodo.type, texto(nodo), tipo):
+            continue
+        forma = literal_esperado(tipo) or f"un literal de tipo {tipo}"
+        return (
+            f"{metodo} está sobrecargado: en la llamada de la línea {asercion.linea} "
+            f"el argumento {posicion} (`{texto(argumento)}`) debe ser {forma} para que "
+            f"Java llame a la versión con {tipo} y no a otra."
+        )
+    return None
 
 
 def _forma_receptor(clase: str, metodo: str, es_static: bool) -> str:

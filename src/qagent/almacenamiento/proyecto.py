@@ -169,7 +169,15 @@ def id_de_spec(modulo: str, objetivo: str) -> str:
     `("api.py", "GET /items/{id}")` -> `api_py__GET_items_id` (endpoint).
     """
 
-    return _acotar_id(_id_spec_anterior(modulo, objetivo), f"{modulo}\0{objetivo}")
+    identidad = f"{modulo}\0{objetivo}"
+    legible = _id_spec_anterior(modulo, objetivo)
+    if "(" in objetivo:
+        # Backlog 2: una sobrecarga Java (`Calc.sumar(int)`) se limpiaría igual que
+        # un método `Calc.sumar_int`; la huella de la identidad completa las separa.
+        # Los objetivos sin firma conservan su identificador de siempre.
+        huella = hashlib.sha256(identidad.encode("utf-8")).hexdigest()[:16]
+        return f"{legible[: LIMITE_ID_ARCHIVO - 17]}_{huella}"
+    return _acotar_id(legible, identidad)
 
 
 def nombre_prueba(spec_id: str) -> str:

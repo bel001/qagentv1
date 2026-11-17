@@ -62,8 +62,9 @@ Sin `--salida`, imprime el JSON completo en la salida estándar.
 
 El banco debe producir dos módulos, dos clases, seis métodos públicos y cero
 errores. Los archivos con errores quedan registrados; no se extraen objetivos
-de esos archivos. Los casos públicos sobrecargados se reportan como limitación
-del prototipo para evitar confundir objetivos `Clase.metodo`.
+de esos archivos. Los métodos sobrecargados se identifican como
+`Clase.metodo(T1,T2)`; solo los que no se pueden distinguir se reportan como
+limitación, con su motivo.
 
 [ejemplo-analisis.json](ejemplo-analisis.json) es una salida real de referencia.
 Al repetir el comando, el bloque de medición puede cambiar. El tiempo incluye

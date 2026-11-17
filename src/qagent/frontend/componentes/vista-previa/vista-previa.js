@@ -60,6 +60,15 @@ registrarComponente('vista-previa/vista-previa', `<!-- ===== 2. EXPLORAR ===== -
       <div id="expMetodosNoDisponibles" class="exp-reco-prox"></div>
     </section>
 
+    <section class="np-tarjeta exp-reco hide" id="expCompat" aria-labelledby="expCompatTitulo">
+      <div class="exp-reco-cab"><div><h2 id="expCompatTitulo">Compatibilidad antes de la corrida</h2>
+        <p class="exp-nota">Análisis estático · 0 tokens. Qué se puede probar tal como está, qué necesita que hagas algo y qué QAgent todavía no soporta.</p></div></div>
+      <p id="expCompatResumen" role="status"></p>
+      <p id="expCompatPreparacion" class="exp-nota" role="status" aria-live="polite"></p>
+      <div id="expCompatRequisitos" class="exp-compat-requisitos"></div>
+      <div id="expCompatDetalle" class="exp-reco-prox"></div>
+    </section>
+
     <div class="exp-rejilla">
       <!-- Carpetas incluidas -->
       <section class="np-tarjeta exp-carpetas" aria-labelledby="expCarpetasTitulo">
@@ -163,6 +172,7 @@ function aplicarResumenDemo() {
   RECOMENDACION = null;   // la recomendación sale del backend; la demostración no la inventa
   renderRecomendacion();
   renderOrientacionPruebas(null);
+  renderCompatibilidad(null);
   const modValidos = MODULES.filter(m => !m.error);
   const fns = modValidos.flatMap(m => m.fns);
   const total = fns.length;
@@ -244,6 +254,7 @@ function cargarDatosVistaPrevia(res) {
       inferible: !!f.inferible,   // issue 275: sin docstring y en Python, el contrato se puede inferir
       noSoportada: f.no_soportada || null,
       orientacion: f.orientacion_prueba || null,
+      compat: f.compatibilidad || null,   // backlog 17: compatible, requiere configuración o no soportado
       br: f.ramas || 0,
       crit: f.critica_propuesta ?? ((f.ramas || 0) > 0),
       inc: !f.no_soportada,
@@ -293,6 +304,8 @@ function cargarDatosVistaPrevia(res) {
 
   MODULES = [...modulosAST, ...modulosErr];
   renderOrientacionPruebas(res.orientacion_pruebas);
+  renderCompatibilidad(res);
+  consultarPreparacion(res.ruta || projectPath);
   actualizarResumenUI(res.resumen, res.errores);
 }
 
@@ -509,6 +522,7 @@ async function cargarProyecto(name, src, where, br='main', ruta='', opciones = {
 function vaciarVistaPrevia() {
   MODULES = [];
   renderOrientacionPruebas(null);
+  renderCompatibilidad(null);
   PROYECTO_MOTIVO_NO_EJECUTABLE = null;
   mostrarLenguajeProyecto();
   reiniciarVistaExplorar();
@@ -584,6 +598,62 @@ function renderOrientacionPruebas(datos){
   $('expAplicarObjetivos').disabled=!(r.recomendada > 0);
   const metodos=datos.metodos_no_seleccionables || [];
   $('expMetodosNoDisponibles').innerHTML = metodos.length ? `<details><summary>${metodos.length} ${metodos.length === 1 ? 'método dentro de una clase todavía no seleccionable' : 'métodos dentro de clases todavía no seleccionables'}</summary><p>La lógica puede estar en estos métodos. Probar una fábrica que devuelve el servicio no comprueba sus métodos.</p><ul>${metodos.map(m=>`<li>${escHtml(m.modulo)} · ${escHtml(m.clase)}.${escHtml(m.nombre)}${m.motivo ? ' — ' + escHtml(m.motivo) : ''}</li>`).join('')}</ul></details>` : '';
+}
+
+// Backlog 17: compatibilidad por proyecto, módulo y objetivo, antes de gastar tokens.
+const TEXTO_COMPAT = {compatible: 'Compatible', requiere_configuracion: 'Requiere configuración', no_soportado: 'No soportado'};
+// Cuántos objetivos se listan en el detalle: en un proyecto grande pueden ser miles.
+const MAX_FILAS_COMPAT = 200;
+function listaCompat(titulo, filas){
+  if(!filas.length) return '';
+  const visibles = filas.slice(0, MAX_FILAS_COMPAT).map(f => `<li>${escHtml(f.ruta)} · <span class="mono">${escHtml(f.objetivo)}</span> — ${escHtml(f.motivo)}</li>`).join('');
+  const resto = filas.length > MAX_FILAS_COMPAT ? `<li>… y ${filas.length - MAX_FILAS_COMPAT} más.</li>` : '';
+  return `<details><summary>${filas.length} ${titulo}</summary><ul>${visibles}${resto}</ul></details>`;
+}
+function renderCompatibilidad(res){
+  const caja = $('expCompat');
+  if(!caja) return;
+  const c = res && res.compatibilidad;
+  caja.classList.toggle('hide', !c);
+  $('expCompatPreparacion').textContent = '';
+  if(!c) return;
+  const o = c.objetivos || {};
+  $('expCompatResumen').innerHTML = `<b>${escHtml(TEXTO_COMPAT[c.estado] || c.estado)}</b> · ${o.compatible || 0} se pueden probar tal como están · ${o.requiere_configuracion || 0} requieren configuración · ${o.no_soportado || 0} no soportados`;
+  $('expCompatRequisitos').innerHTML = (c.requisitos || []).map(r =>
+    `<p class="np-texto"><b>${escHtml(TEXTO_COMPAT[r.estado] || r.estado)}</b> · ${escHtml(r.motivo)}</p>`).join('');
+  const porEstado = {requiere_configuracion: [], no_soportado: []};
+  (res.modulos || []).forEach(m => {
+    [...(m.funciones || []), ...(m.endpoints || [])].forEach(x => {
+      const e = x.compatibilidad;
+      if(e && porEstado[e.estado]) porEstado[e.estado].push({ruta: m.ruta, objetivo: x.nombre || x.objetivo || x.manejador || '', motivo: e.motivo});
+    });
+  });
+  Object.entries(c.modulos || {}).forEach(([ruta, m]) => {
+    (m.fuera || []).forEach(f => porEstado.no_soportado.push({ruta, objetivo: f.objetivo || '', motivo: f.motivo}));
+    if(m.estado === 'no_soportado' && !(m.objetivos && (m.objetivos.no_soportado || m.objetivos.compatible || m.objetivos.requiere_configuracion)))
+      porEstado.no_soportado.push({ruta, objetivo: 'archivo completo', motivo: m.motivo});
+  });
+  $('expCompatDetalle').innerHTML =
+    listaCompat('requieren configuración', porEstado.requiere_configuracion)
+    + listaCompat('no soportados', porEstado.no_soportado);
+}
+// La preparación consulta Docker: se pide aparte para no retrasar la Vista previa.
+const TEXTO_PREPARACION = {
+  validada: 'Preparación validada', pendiente: 'Preparación pendiente', no_disponible: 'Docker no disponible',
+  bloqueada: 'Preparación bloqueada', desconocida: 'Preparación sin comprobar',
+};
+async function consultarPreparacion(ruta){
+  const el = $('expCompatPreparacion');
+  const api = window.pywebview && window.pywebview.api;
+  if(!el || !(api && api.estado_preparacion)) return;
+  el.textContent = 'Entorno aislado: comprobando…';
+  try {
+    const r = await api.estado_preparacion(ruta);
+    if(rutaComparable(ruta) !== rutaComparable(projectPath)) return;   // ya se abrió otro proyecto
+    el.innerHTML = `<b>${escHtml(TEXTO_PREPARACION[r.estado] || r.estado)}</b> · ${escHtml(r.mensaje || '')}`;
+  } catch (err) {
+    el.textContent = 'Entorno aislado: no se pudo comprobar.';
+  }
 }
 
 function aplicarSeleccionRecomendada(){
@@ -946,7 +1016,7 @@ function renderFns(){
   const fnsVis = fns.filter(funcionVisible);
   $('fnTable').innerHTML = fnsVis.slice(0, FILAS_VISIBLES).map(({m, mi, f, fi}) => `<tr>
       <td class="col-incl"><input type="checkbox" class="exp-caja" aria-label="Incluir función: ${escHtml(f.n)}" ${f.inc ? 'checked' : ''} ${f.noSoportada ? `disabled title="${escHtml(f.noSoportada)}"` : ''} onchange="toggle(${mi},${fi},'inc')"></td>
-      <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${!f.noSoportada && tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div>${f.noSoportada ? `<div class="sub" role="note">Fuera del alcance: ${escHtml(f.noSoportada)}</div>` : f.orientacion ? `<div class="sub" role="note"><b>${f.orientacion.categoria === 'recomendada' ? 'Recomendada para empezar' : 'Revisar antes de usar IA'}</b> · ${escHtml(f.orientacion.motivo)}</div>` : ''}</td>
+      <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${!f.noSoportada && tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div>${f.noSoportada ? `<div class="sub" role="note">Fuera del alcance: ${escHtml(f.noSoportada)}</div>` : f.compat && f.compat.estado === 'requiere_configuracion' ? `<div class="sub" role="note"><b>Requiere configuración</b> · ${escHtml(f.compat.motivo)}</div>` : f.orientacion ? `<div class="sub" role="note"><b>${f.orientacion.categoria === 'recomendada' ? 'Recomendada para empezar' : 'Revisar antes de usar IA'}</b> · ${escHtml(f.orientacion.motivo)}</div>` : ''}</td>
       <td>${textoComplejidad(f.br)}</td>
       <td>${textoDesdeUltimaVez(m)}</td>
       <td class="col-prof"><input type="checkbox" class="exp-caja" aria-label="Profundizar: ${escHtml(f.n)}" ${f.crit ? 'checked' : ''} ${f.inc ? '' : 'disabled'} title="${f.inc ? 'Profundizar: solicita un análisis más exhaustivo de la función. Se aplica si activas Profundizar en la configuración de pruebas.' : 'Incluye la función para poder profundizar en ella.'}" onchange="toggle(${mi},${fi},'crit')"></td>

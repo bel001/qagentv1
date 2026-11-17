@@ -255,24 +255,27 @@ def test_contrato_conserva_criticidad_y_mapa_del_analizador(tmp_path: Path) -> N
     assert plan[0]["llama_a"] == ["Banco.java::Banco.auxiliar"]
 
 
-@pytest.mark.parametrize(
-    ("entrada", "tipo", "esperado"),
-    [
-        ([1, 2, 3], "int...", 6),
-        ({"xs": [1, 2, 3]}, "int...", 6),
-        ({"xs": [1, 2, 3]}, "int[]", 6),
-    ],
-)
-def test_entradas_arrays_y_varargs(
-    tmp_path: Path, entrada, tipo: str, esperado
-) -> None:
-    """Arrays y varargs admiten la representación JSON acordada para el Planner."""
+@pytest.mark.parametrize("entrada", [[[1, 2, 3]], {"xs": [1, 2, 3]}])
+def test_entradas_arrays(tmp_path: Path, entrada) -> None:
+    """Los arrays admiten la representación JSON acordada para el Planner."""
     _, plan = _planificar(
         tmp_path,
-        f"class Banco {{ /** Devuelve la suma de xs. */ public int f({tipo} xs) {{return 0;}} }}",
-        [_caso(entrada, esperado)],
+        "class Banco { /** Devuelve la suma de xs. */ public int f(int[] xs) {return 0;} }",
+        [_caso(entrada, 6)],
     )
     assert len(plan) == 1
+
+
+def test_varargs_se_omite_antes_de_llamar_a_la_ia(tmp_path: Path) -> None:
+    """Backlog 17: el validador Java aún no admite varargs y rechazaba siempre la
+    prueba después de gastar tokens; ahora el método se omite con su motivo."""
+    planner, plan = _planificar(
+        tmp_path,
+        "class Banco { /** Devuelve la suma de xs. */ public int f(int... xs) {return 0;} }",
+        [_caso({"xs": [1, 2, 3]}, 6)],
+    )
+    assert plan == []
+    assert "varargs" in planner.omitidas["Banco.f"]
 
 
 def test_endpoints_spring_no_reutilizan_prompts_fastapi() -> None:

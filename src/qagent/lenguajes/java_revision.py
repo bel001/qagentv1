@@ -30,6 +30,7 @@ from typing import Any
 from qagent.lenguajes.base import Clasificacion
 from qagent.lenguajes.java_ejecucion import MARCA
 from qagent.lenguajes.java_generacion import ReglasGeneracionJava
+from qagent.lenguajes.java_identidad import base_de, es_sobrecarga, identidad
 from qagent.lenguajes.java_junit import interpretar_junit_java
 from qagent.lenguajes.treesitter import extraer_errores_sintaxis, obtener_parser
 from qagent.sandbox.informe_pytest import JUnitInvalido
@@ -117,7 +118,9 @@ def clasificar_java(resultado: ResultadoSandbox) -> Clasificacion | None:
         en_objetivo = not objetivo or any(
             re.search(
                 r"\bat\s+(?:[\w$]+\.)*"
-                + r"[.$]".join(re.escape(parte) for parte in objetivo.split("."))
+                + r"[.$]".join(
+                    re.escape(parte) for parte in base_de(objetivo).split(".")
+                )
                 + r"\(",
                 c.get("traza") or "",
             )
@@ -179,7 +182,12 @@ class ReglasRevisionJava(ReglasGeneracionJava):
     def rango_de_objetivo(
         self, raiz: Path, modulo: str, nombre: str
     ) -> tuple[int, int] | None:
-        """Ubica un método por clase y nombre; una sobrecarga no elige al azar."""
+        """Ubica un método por clase y nombre; una sobrecarga, por su firma (backlog 2).
+
+        Sin firma y con varias declaraciones del mismo nombre no elige al azar.
+        """
+        from qagent.lenguajes.java import _parametros
+
         # J10: no se analiza todo el proyecto; se lee solo el archivo del objetivo.
         try:
             arbol = obtener_parser("java").parse((raiz / modulo).read_bytes()).root_node
@@ -198,7 +206,12 @@ class ReglasRevisionJava(ReglasGeneracionJava):
                 clase = f"{clase}.{simple}" if clase else simple
             if nodo.type == "method_declaration":
                 simple = nodo.child_by_field_name("name").text.decode("utf-8")
-                if f"{clase}.{simple}" == nombre:
+                base = f"{clase}.{simple}"
+                if base == nombre or (
+                    es_sobrecarga(nombre)
+                    and base == base_de(nombre)
+                    and identidad(base, _parametros(nodo)) == nombre
+                ):
                     encontrados.append(
                         (nodo.start_point.row + 1, nodo.end_point.row + 1)
                     )

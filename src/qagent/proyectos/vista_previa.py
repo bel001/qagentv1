@@ -50,6 +50,7 @@ from qagent.lenguajes import (
     fuera_de_la_corrida,
 )
 from qagent.llm.tracker import TokenTracker
+from qagent.proyectos.compatibilidad import evaluar as evaluar_compatibilidad
 from qagent.proyectos.orientacion import orientar_funcion, resumir_orientacion
 
 _log = logging.getLogger(__name__)
@@ -274,6 +275,9 @@ def generar_vista_previa(
             funciones_mod.append(
                 {
                     **f,
+                    # El motivo del adaptador (p. ej. varargs en Java), para que la
+                    # interfaz no la ofrezca como seleccionable.
+                    "no_soportada": no_soportada,
                     "orientacion_prueba": orientar_funcion(f, no_soportada),
                     "aviso_docstring": aviso_doc,
                     "etiqueta_docstring": etiqueta_doc,
@@ -308,6 +312,15 @@ def generar_vista_previa(
 
     # Priorización: primero los módulos con más funciones con ramas (criterio 7)
     modulos_priorizados = priorizar_modulos(modulos_procesados)
+    # Backlog 17: qué se puede probar tal como está, antes de gastar tokens.
+    compatibilidad = evaluar_compatibilidad(
+        carpeta,
+        adaptador,
+        modulos_priorizados,
+        resultado_ast["errores"],
+        inferencia_activa=infiere,
+        limite_inferencia=_limite_inferencia() if infiere else None,
+    )
 
     # Errores con su etiqueta "no se pudo analizar" (criterio 5)
     errores_procesados = [
@@ -333,6 +346,7 @@ def generar_vista_previa(
         "motivo_no_ejecutable": adaptador.motivo_no_ejecutable(carpeta),
         "modulos": modulos_priorizados,
         "orientacion_pruebas": resumir_orientacion(modulos_priorizados),
+        "compatibilidad": compatibilidad,
         "errores": errores_procesados,
         "resumen": resultado_ast["resumen"],
         # #171: React se prueba; otro framework de interfaz se avisa como

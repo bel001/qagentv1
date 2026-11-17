@@ -86,8 +86,10 @@ if/switch y no considera catch como una rama de cobertura.
 La sección functions conserva contadores de class/method por nombre y descriptor
 JVM. `cobertura_de_metodo` selecciona ese resumen exacto; no suma las líneas de
 varios métodos para inventar la cobertura del archivo. Esto distingue métodos
-que comparten un renglón. Las sobrecargas se guardan con descriptor y no se elige
-una de ellas por nombre sin más información. Sin ramas, la métrica es None;
+que comparten un renglón. Las sobrecargas se guardan con descriptor; el objetivo
+`Clase.metodo(T1,T2)` se busca comparando sus tipos con los del descriptor, y un
+genérico (`T`, que el descriptor escribe como su cota) solo se acepta si es la
+única versión con ese número de parámetros. Sin firma no se elige una por nombre. Sin ramas, la métrica es None;
 sin líneas de fuente utilizables, el lector devuelve None.
 
 Las rutas se proyectan a src/main/java/paquete/Archivo.java, que es la disposición
