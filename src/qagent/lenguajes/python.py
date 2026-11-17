@@ -41,6 +41,7 @@ from qagent.lenguajes.python_version import (
 from qagent.sandbox.ejecucion import (
     ARCHIVO_JUNIT,
     ARCHIVO_TEST_GENERADO,
+    DIR_PROYECTO,
     DIR_SALIDA,
     DIR_TESTS,
     comando_pytest,
@@ -172,8 +173,16 @@ class PythonAdapter(LanguageAdapter):
         return Path(modulo).with_suffix("").as_posix().replace("/", ".")
 
     def variables_pruebas(self) -> dict[str, str]:
-        """El ``.coverage`` de pytest-cov va a ``/out`` (el resto es de solo lectura)."""
-        return {"COVERAGE_FILE": f"{DIR_SALIDA}/.coverage"}
+        """El ``.coverage`` de pytest-cov va a ``/out`` (el resto es de solo lectura).
+
+        ``PYTHONPATH`` suma ``src/`` (backlog 10, ADR-017): en un proyecto con esa
+        estructura los imports internos del paquete funcionan sin instalarlo. En uno
+        sin ``src/`` la ruta no existe y no cambia nada.
+        """
+        return {
+            "COVERAGE_FILE": f"{DIR_SALIDA}/.coverage",
+            "PYTHONPATH": f"{DIR_PROYECTO}:{DIR_PROYECTO}/src",
+        }
 
     version_por_defecto: str = VERSION_PYTHON_DEFECTO
 

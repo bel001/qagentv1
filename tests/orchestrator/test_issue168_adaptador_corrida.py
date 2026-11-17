@@ -302,5 +302,8 @@ def test_la_regresion_corre_con_el_comando_del_adaptador(
     for llamada in llamadas:
         assert "--cov=banco_mvp" in llamada["comando"]
         assert llamada["archivo_informe"] == "junit.xml"
-        assert llamada["variables"] == {"COVERAGE_FILE": "/out/.coverage"}
+        assert llamada["variables"] == {
+            "COVERAGE_FILE": "/out/.coverage",
+            "PYTHONPATH": "/work/proyecto:/work/proyecto/src",
+        }
         assert llamada["limites"] == config.sandbox

@@ -27,6 +27,8 @@ COMPATIBLE = "compatible"
 REQUIERE_CONFIGURACION = "requiere_configuracion"
 NO_SOPORTADO = "no_soportado"
 ESTADOS = (COMPATIBLE, REQUIERE_CONFIGURACION, NO_SOPORTADO)
+#: Requisito informativo del proyecto: no impide ni condiciona la corrida.
+AVISO = "aviso"
 
 #: Estados de la preparación del entorno aislado.
 PREPARACION_VALIDADA = "validada"
@@ -217,6 +219,7 @@ def requisitos_del_proyecto(raiz: str | os.PathLike[str], adaptador: Any) -> lis
         adaptador.resolver_version_python(carpeta)
     except VersionPythonNoSoportada as error:
         requisitos.append(_estado(NO_SOPORTADO, str(error)))
+    requisitos.extend(_requisitos_de_manifiesto(carpeta))
     requirements = carpeta / "requirements.txt"
     if requirements.is_file() and not requirements.is_symlink():
         from qagent.sandbox.imagen import ErrorConstruccionImagen, revisar_requirements
@@ -232,6 +235,26 @@ def requisitos_del_proyecto(raiz: str | os.PathLike[str], adaptador: Any) -> lis
                     f"No se pudo leer requirements.txt ({error}); revisa el archivo.",
                 )
             )
+    return requisitos
+
+
+def _requisitos_de_manifiesto(carpeta: Path) -> list[dict]:
+    """Dependencias declaradas en pyproject.toml, setup.cfg o setup.py (ADR-017)."""
+    from qagent.sandbox.manifiestos_python import (
+        ManifiestoNoSoportado,
+        avisos_de_manifiesto,
+        dependencias_del_manifiesto,
+    )
+
+    requisitos = []
+    if not (carpeta / "requirements.txt").is_file():
+        try:
+            dependencias_del_manifiesto(carpeta)
+        except (ManifiestoNoSoportado, OSError, UnicodeError) as error:
+            requisitos.append(_estado(REQUIERE_CONFIGURACION, str(error)))
+    for aviso in avisos_de_manifiesto(carpeta):
+        estado = REQUIERE_CONFIGURACION if "setup.py" in aviso else AVISO
+        requisitos.append(_estado(estado, aviso))
     return requisitos
 
 
@@ -310,6 +333,7 @@ def estado_preparacion(raiz: str | os.PathLike[str]) -> dict[str, str]:
         adaptador_del_proyecto,
     )
     from qagent.sandbox.estado import estado_docker
+    from qagent.sandbox.modelos import ErrorConstruccionImagen
 
     try:
         adaptador = adaptador_del_proyecto(raiz)
@@ -325,6 +349,8 @@ def estado_preparacion(raiz: str | os.PathLike[str]) -> dict[str, str]:
         imagen = adaptador.entorno_sandbox(Path(raiz)).imagen
         pendiente = construccion_pendiente(raiz, obtener_cliente(), imagen)
     except VersionPythonNoSoportada as error:
+        return {"estado": PREPARACION_BLOQUEADA, "mensaje": str(error)}
+    except ErrorConstruccionImagen as error:
         return {"estado": PREPARACION_BLOQUEADA, "mensaje": str(error)}
     except Exception as error:  # noqa: BLE001 — informar nunca debe romper la vista
         return {

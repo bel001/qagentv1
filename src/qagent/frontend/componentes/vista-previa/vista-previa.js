@@ -601,7 +601,7 @@ function renderOrientacionPruebas(datos){
 }
 
 // Backlog 17: compatibilidad por proyecto, módulo y objetivo, antes de gastar tokens.
-const TEXTO_COMPAT = {compatible: 'Compatible', requiere_configuracion: 'Requiere configuración', no_soportado: 'No soportado'};
+const TEXTO_COMPAT = {compatible: 'Compatible', requiere_configuracion: 'Requiere configuración', no_soportado: 'No soportado', aviso: 'Aviso'};
 // Cuántos objetivos se listan en el detalle: en un proyecto grande pueden ser miles.
 const MAX_FILAS_COMPAT = 200;
 function listaCompat(titulo, filas){

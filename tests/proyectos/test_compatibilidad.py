@@ -270,3 +270,39 @@ def test_preparacion_que_falla_al_consultar_es_desconocida(
     resultado = estado_preparacion(_python(tmp_path))
     assert resultado["estado"] == compatibilidad.PREPARACION_DESCONOCIDA
     assert "socket cerrado" in resultado["mensaje"]
+
+
+# --- manifiestos (backlog 10) ------------------------------------------------------
+
+
+def test_una_dependencia_local_en_pyproject_requiere_configuracion(tmp_path) -> None:
+    _python(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.poetry.dependencies]\nmilib = { path = "../milib" }\n', encoding="utf-8"
+    )
+
+    resultado, _ = _evaluar(tmp_path, PythonAdapter())
+
+    assert resultado["estado"] == REQUIERE_CONFIGURACION
+    assert any("«milib»" in r["motivo"] for r in resultado["requisitos"])
+
+
+def test_solo_setup_py_requiere_configuracion(tmp_path) -> None:
+    _python(tmp_path)
+    (tmp_path / "setup.py").write_text(
+        "from setuptools import setup\n", encoding="utf-8"
+    )
+
+    resultado, _ = _evaluar(tmp_path, PythonAdapter())
+
+    assert resultado["estado"] == REQUIERE_CONFIGURACION
+
+
+def test_un_lockfile_es_un_aviso_que_no_cambia_el_estado(tmp_path) -> None:
+    _python(tmp_path)
+    (tmp_path / "uv.lock").write_text("# lock\n", encoding="utf-8")
+
+    resultado, _ = _evaluar(tmp_path, PythonAdapter())
+
+    assert resultado["estado"] == COMPATIBLE
+    assert [r["estado"] for r in resultado["requisitos"]] == [compatibilidad.AVISO]
