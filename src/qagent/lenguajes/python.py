@@ -41,6 +41,7 @@ from qagent.lenguajes.python_version import (
 from qagent.sandbox.ejecucion import (
     ARCHIVO_JUNIT,
     ARCHIVO_TEST_GENERADO,
+    DIR_PROYECTO,
     DIR_SALIDA,
     DIR_TESTS,
     comando_pytest,
@@ -74,7 +75,9 @@ def _agregar_integraciones(
                 {
                     **m,
                     "funciones": [
-                        f for f in m.get("funciones", []) if not f.get("no_soportada")
+                        f
+                        for f in m.get("funciones", [])
+                        if not f.get("no_soportada") and not f.get("tipo_metodo")
                     ],
                 }
                 for m in estructura["modulos"]
@@ -158,7 +161,11 @@ class PythonAdapter(LanguageAdapter):
         además ``integraciones`` (#245, ADR-014): las cadenas candidatas a una prueba
         de integración interna. Sin candidatas, la clave no aparece.
         """
-        estructura: Estructura = {"lenguaje": self.lenguaje, **analizar_proyecto(raiz)}
+        # Backlog 11 (ADR-017): también los métodos públicos de las clases.
+        estructura: Estructura = {
+            "lenguaje": self.lenguaje,
+            **analizar_proyecto(raiz, metodos=True),
+        }
         _agregar_integraciones(estructura, raiz)
         return estructura
 
@@ -172,8 +179,16 @@ class PythonAdapter(LanguageAdapter):
         return Path(modulo).with_suffix("").as_posix().replace("/", ".")
 
     def variables_pruebas(self) -> dict[str, str]:
-        """El ``.coverage`` de pytest-cov va a ``/out`` (el resto es de solo lectura)."""
-        return {"COVERAGE_FILE": f"{DIR_SALIDA}/.coverage"}
+        """El ``.coverage`` de pytest-cov va a ``/out`` (el resto es de solo lectura).
+
+        ``PYTHONPATH`` suma ``src/`` (backlog 10, ADR-017): en un proyecto con esa
+        estructura los imports internos del paquete funcionan sin instalarlo. En uno
+        sin ``src/`` la ruta no existe y no cambia nada.
+        """
+        return {
+            "COVERAGE_FILE": f"{DIR_SALIDA}/.coverage",
+            "PYTHONPATH": f"{DIR_PROYECTO}:{DIR_PROYECTO}/src",
+        }
 
     version_por_defecto: str = VERSION_PYTHON_DEFECTO
 
@@ -247,7 +262,7 @@ class PythonAdapter(LanguageAdapter):
 
     def huellas_de_archivo(self, fuente: str, relativa: str) -> dict[str, str] | None:
         """Huella tree-sitter de cada función pública y ruta FastAPI (HU-24, HU-25)."""
-        return python_regresion.huellas_de_archivo(fuente, relativa)
+        return python_regresion.huellas_de_archivo(fuente, relativa, metodos=True)
 
     def funciones_de_modulo(self, raiz: Path, modulo: str) -> list[dict[str, Any]]:
         """Línea del `def` de cada función de primer nivel (mutación de reg_deep)."""
@@ -260,6 +275,11 @@ class PythonAdapter(LanguageAdapter):
     def reglas_planificacion(self) -> ReglasPlanificacionPython:
         """Prompts y filtros de casos de pytest y FastAPI para el Planner (#168)."""
         return REGLAS_PLANIFICACION_PYTHON
+
+    def contexto_de_endpoint(self, endpoint: dict[str, Any]) -> dict[str, Any]:
+        """Conserva los Depends detectados aunque todavía no tengan un reemplazo."""
+        dependencias = endpoint.get("dependencias", [])
+        return {"dependencias_detectadas": dependencias} if dependencias else {}
 
     def proveedor_inferencia(
         self,
@@ -289,6 +309,16 @@ class PythonAdapter(LanguageAdapter):
     def reglas_revision(self) -> ReglasRevisionPython:
         """Sintaxis, oráculo y salida de pytest para el Reviewer (#168)."""
         return REGLAS_REVISION_PYTHON
+
+    def validar_oraculo(
+        self, contrato: dict[str, Any], codigo: str, ruta_proyecto: Path
+    ) -> str | None:
+        """Comprueba el montaje FastAPI y las aserciones antes de ejecutar el test."""
+        from qagent.lenguajes.python_endpoints import error_preparacion_endpoint
+
+        return error_preparacion_endpoint(
+            contrato, codigo, ruta_proyecto
+        ) or self.reglas_revision().validar_oraculo(contrato, codigo)
 
     def comando_mutacion(self, modulo: str, funciones: list[str]) -> ComandoSandbox:
         """mutmut sobre las funciones críticas, con el script del sandbox (EN-09)."""

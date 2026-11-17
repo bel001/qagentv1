@@ -81,6 +81,12 @@ def contexto_de_funcion(
         ),
         None,
     )
+    if funcion is None and "." in nombre:
+        # Método de una clase (ADR-017): su código y lo que usa del módulo.
+        from qagent.analysis.metodos_python import nodo_de_metodo
+
+        encontrado = nodo_de_metodo(arbol, nombre)
+        funcion = definicion(encontrado[1]) if encontrado is not None else None
     if funcion is None:
         return None
     # Desde el `def` (sin decoradores) hasta la última sentencia, como

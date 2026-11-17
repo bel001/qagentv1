@@ -180,6 +180,21 @@ def test_feedback_largo_se_recorta_al_final() -> None:
     assert len(prompt) < 5_000
 
 
+def test_feedback_largo_conserva_el_diagnostico_que_guia_la_correccion() -> None:
+    cliente = ClienteGrabado(CODIGO)
+    feedback = (
+        "Repara los overrides de autenticación; conserva las aserciones.\n"
+        + "x" * 10_000
+        + "\nAssertionError: assert 500 == 200"
+    )
+    GeneratorAgent(cliente, TokenTracker()).generar(CONTRATO, 2, feedback)
+    [llamada] = cliente.llamadas
+    prompt = llamada[0]
+    assert "Repara los overrides de autenticación" in prompt
+    assert "AssertionError: assert 500 == 200" in prompt
+    assert len(prompt) < 5_000
+
+
 def test_prompt_endpoint_exige_testclient_y_overrides_seguros() -> None:
     cliente = ClienteGrabado(CODIGO)
 
@@ -188,7 +203,7 @@ def test_prompt_endpoint_exige_testclient_y_overrides_seguros() -> None:
     prompt = cliente.llamadas[0][0]
     assert "fastapi.testclient.TestClient" in prompt
     assert "from api_mvp import app, obtener_repositorio, Repositorio" in prompt
-    assert "app.dependency_overrides[funcion] = reemplazo" in prompt
+    assert "app_pruebas.dependency_overrides[funcion] = reemplazo" in prompt
     assert "limpia el diccionario" in prompt
     assert "Nunca reemplaces el manejador" in prompt
     assert "response.status_code" in prompt

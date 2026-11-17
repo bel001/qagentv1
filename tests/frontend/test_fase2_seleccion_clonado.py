@@ -41,9 +41,10 @@ def test_seleccion_persiste_y_se_envia_al_backend() -> None:
     assert "function obtenerSeleccionObjetivos" in vista
     assert "filter(f => f.inc && !f.noSoportada).map(f => f.n)" in vista
     assert (
-        "start_run(projectPath, profile, obtenerSeleccionObjetivos(), INFERIR_SIN_DOCSTRING"
+        "const opciones = [projectPath, profile, obtenerSeleccionObjetivos(), INFERIR_SIN_DOCSTRING"
         in monitor
     )
+    assert "window.pywebview.api.start_run(...opciones)" in monitor
 
 
 def test_examinar_usa_selector_nativo_sin_clonar_y_conserva_cancelacion() -> None:

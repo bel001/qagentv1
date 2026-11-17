@@ -74,6 +74,7 @@ CONTROL = {
     "no_aplica": "No aplica",
     "pendiente": "Pendiente",
     "sin_dato": "Sin dato",
+    "no_ejecutado": "No ejecutado",
 }
 
 # Símbolo de QAgent (assets/logo/qagent-icono.svg), en coordenadas del SVG (100 x 100)
@@ -379,6 +380,25 @@ class _Lienzo:
 # ---------------------------------------------------------------------------------------
 
 
+def nombre_de_lenguaje(lenguaje: str) -> str:
+    """Nombre visible de un lenguaje (`java` -> «Java»), el mismo que usa la app."""
+    from qagent.lenguajes import adaptador_para
+
+    try:
+        return adaptador_para(lenguaje).nombre_visible
+    except KeyError:
+        return lenguaje.capitalize()
+
+
+def lenguajes_de_la_corrida(funciones: list[dict[str, Any]]) -> str:
+    """Lenguajes de los objetivos del informe, en el orden en que aparecen.
+
+    Un resultado guardado antes de los adaptadores por lenguaje no lo trae: es Python.
+    """
+    lenguajes = dict.fromkeys(str(f.get("lenguaje") or "python") for f in funciones)
+    return " y ".join(nombre_de_lenguaje(nombre) for nombre in lenguajes or ["python"])
+
+
 def _clase_bandeja(f: dict[str, Any]) -> tuple[str, str, str, int]:
     return BANDEJA.get(str(f.get("estado")), BANDEJA["sin_veredicto"])
 
@@ -471,7 +491,7 @@ def _portada(
 
     meta = [
         Path(str(datos.get("proyecto") or "")).name,  # solo el nombre, no la ruta
-        "Python",
+        lenguajes_de_la_corrida(funciones),
         str(datos.get("fecha") or "")[:16].replace("T", " "),
     ]
     if datos.get("rama"):
@@ -727,6 +747,12 @@ def _resultado_funcion(
             ESTADOS["aviso"][0],
         )
 
+    if f.get("texto_fase_fallo"):
+        lz.espacio(3)
+        lz.parrafo(
+            limpiar(f"Dónde se detuvo: {f['texto_fase_fallo']}"), 8.5, "F1", TEXTO_2
+        )
+
     controles = f.get("controles") or []
     if controles:
         en_orden = sum(1 for c in controles if c.get("estado") == "ok")
@@ -820,7 +846,10 @@ def _resultado_funcion(
     if opts.get("trazas"):
         traza = f.get("traza") or (fallo or {}).get("traza")
         if traza:
-            lz.caja_codigo(limpiar(str(traza)), "Detalle técnico (salida de pytest)", 7)
+            ejecutor = str(f.get("framework_pruebas") or "pytest")
+            lz.caja_codigo(
+                limpiar(str(traza)), f"Detalle técnico (salida de {ejecutor})", 7
+            )
 
 
 def construir_pdf(
@@ -842,6 +871,13 @@ def construir_pdf(
     _metas(lz, datos)
     _prioridades(lz, funciones, limpiar)
     _datos_corrida(lz, datos, limpiar)
+    from qagent.storage.informe_contexto import lineas_contexto
+
+    contexto = lineas_contexto(datos)
+    if contexto:
+        lz.titulo_seccion("Contexto recuperado automáticamente")
+        for linea in contexto:
+            lz.parrafo(limpiar(linea), 9, "F1", TEXTO)
     _comparacion_corridas(lz, datos, limpiar)
 
     if opts.get("detalle"):

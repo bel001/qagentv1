@@ -56,6 +56,35 @@ OK, FALLA, NO_APLICA, PENDIENTE, SIN_DATO = (
     "pendiente",
     "sin_dato",
 )
+#: El control no llegó a comprobarse: la prueba se rechazó antes de ejecutarse.
+NO_EJECUTADO = "no_ejecutado"
+NOTA_NO_EJECUTADO = "No ejecutado: la prueba se rechazó antes de llegar al sandbox"
+#: Dónde se detuvo un objetivo que no quedó aprobado, en palabras de la persona.
+TEXTO_FASE_FALLO = {
+    "planificacion": (
+        "Planificación: QAgent no obtuvo un plan de casos válido para este "
+        "objetivo. No es un error de tu código."
+    ),
+    "generacion": (
+        "Generación: QAgent no obtuvo el código de la prueba. No es un error de "
+        "tu código."
+    ),
+    "validacion": (
+        "Validación: la prueba generada se rechazó antes de ejecutarse y no llegó "
+        "al sandbox. No es un error de tu código."
+    ),
+    "ejecucion": (
+        "Ejecución: la prueba corrió en el sandbox y falló por un error de la "
+        "propia prueba, no por una aserción del contrato."
+    ),
+    "entorno": (
+        "Entorno: el sandbox, las dependencias o el proveedor de IA impidieron "
+        "obtener un veredicto. No es un error de tu código."
+    ),
+    "proyecto": (
+        "Proyecto: la prueba corrió y el código del proyecto no cumplió el contrato."
+    ),
+}
 
 
 def _segundos(valor: Any) -> float | None:
@@ -374,6 +403,8 @@ def _funcion(
         "codigo": (texto or {}).get("codigo"),
         "traza": (texto or {}).get("traza"),
         "controles": controles,
+        "fase_fallo": objetivo.get("fase_fallo"),
+        "texto_fase_fallo": TEXTO_FASE_FALLO.get(objetivo.get("fase_fallo")),
         "intentos": intentos,
         "ejecucion": next(
             (i["ejecucion"] for i in reversed(intentos) if i["ejecucion"]), None
@@ -487,9 +518,22 @@ def _controles(
     texto_ramas = "sin ramas" if ramas is None else f"{ramas:g} %"
     texto_lineas = "—" if lineas is None else f"{lineas:g} %"
     es_bug = objetivo["decision"] == "bug_detectado"
+    no_ejecutados = set(objetivo.get("controles_no_ejecutados") or [])
+    # Las aserciones fallan por laundering o porque el oráculo no sale del contrato:
+    # sin laundering, lo que falló fue el oráculo y así se nombra.
+    oraculo_rechazado = guardados.get("aserciones") is False and not objetivo.get(
+        "laundering_detectado"
+    )
 
     def control(clave: str, etiqueta: str) -> dict[str, Any]:
         valor = guardados.get(clave)
+        if valor is None and clave in no_ejecutados:
+            return {
+                "clave": clave,
+                "etiqueta": etiqueta,
+                "estado": NO_EJECUTADO,
+                "nota": NOTA_NO_EJECUTADO,
+            }
         estado = SIN_DATO if valor is None else (OK if valor else FALLA)
         return {"clave": clave, "etiqueta": etiqueta, "estado": estado}
 
@@ -515,7 +559,7 @@ def _controles(
         control(
             "aserciones",
             "Oráculo trazable al contrato del Planner"
-            if es_bug
+            if es_bug or oraculo_rechazado
             else "Aserciones no relajadas (anti-laundering)",
         ),
         cobertura,

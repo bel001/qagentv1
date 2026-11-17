@@ -95,10 +95,11 @@ class GeneratorAgent:
 
 
 def _recortar(texto: str, maximo: int = LARGO_MAXIMO_FEEDBACK) -> str:
-    """Deja solo el final del feedback (donde el runner pone el error) para ahorrar tokens."""
+    """Conserva el diagnóstico inicial y el error final sin reenviar todo el log."""
     if len(texto) <= maximo:
         return texto
-    return "[…recortado…]\n" + texto[-maximo:]
+    inicio = maximo // 3
+    return texto[:inicio] + "\n[…recortado…]\n" + texto[-(maximo - inicio) :]
 
 
 def _quitar_cerca(contenido: str) -> str:

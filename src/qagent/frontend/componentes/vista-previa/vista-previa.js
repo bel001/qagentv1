@@ -60,6 +60,15 @@ registrarComponente('vista-previa/vista-previa', `<!-- ===== 2. EXPLORAR ===== -
       <div id="expMetodosNoDisponibles" class="exp-reco-prox"></div>
     </section>
 
+    <section class="np-tarjeta exp-reco hide" id="expCompat" aria-labelledby="expCompatTitulo">
+      <div class="exp-reco-cab"><div><h2 id="expCompatTitulo">Compatibilidad antes de la corrida</h2>
+        <p class="exp-nota">Análisis estático · 0 tokens. Qué se puede probar tal como está, qué necesita que hagas algo y qué QAgent todavía no soporta.</p></div></div>
+      <p id="expCompatResumen" role="status"></p>
+      <p id="expCompatPreparacion" class="exp-nota" role="status" aria-live="polite"></p>
+      <div id="expCompatRequisitos" class="exp-compat-requisitos"></div>
+      <div id="expCompatDetalle" class="exp-reco-prox"></div>
+    </section>
+
     <div class="exp-rejilla">
       <!-- Carpetas incluidas -->
       <section class="np-tarjeta exp-carpetas" aria-labelledby="expCarpetasTitulo">
@@ -107,10 +116,12 @@ registrarComponente('vista-previa/vista-previa', `<!-- ===== 2. EXPLORAR ===== -
           </table></div>
         </div>
         <p class="exp-pie"><span id="expMostrando"></span><span id="footMsg"></span><span id="expCambios"></span></p>
+        <p class="exp-pie exp-mas-filas" id="expMasFilas" hidden><span id="expMasFilasTxt"></span><button type="button" class="ini-btn" onclick="mostrarMasFilas()">Mostrar más</button></p>
       </section>
     </div>
 
     <!-- EP-11: archivos de JS o TS que no prueba esta corrida -->
+    <div class="np-aviso np-aviso-aviso exp-errores hide" id="expParcial" role="status">${ICO_AVISO_EXP}<div><b>Exploración parcial del proyecto</b><div id="expParcialTxt"></div></div></div>
     <div class="np-aviso np-aviso-aviso exp-errores hide" id="expFuera">${ICO_AVISO_EXP}<div><b id="expFueraTitulo"></b><div id="expFueraLista"></div></div></div>
 
     <!-- Archivos que no se pudieron leer -->
@@ -142,11 +153,16 @@ const TIPOS_PROXIMAMENTE = {
 // Vista de objetivos activa: 'funciones' (por defecto) o 'endpoints' (issue #66).
 let VISTA_OBJETIVOS = 'funciones';
 let BUSQUEDA = '';   // texto del buscador de la tabla, en minúsculas
+// En un proyecto grande hay miles de objetivos: dibujarlos todos en cada clic congela la
+// ventana. La tabla dibuja por tandas; la selección y las cifras cuentan siempre todo.
+const FILAS_POR_TANDA = 300;
+let FILAS_VISIBLES = FILAS_POR_TANDA;
 
 // Al cargar otro proyecto, la tabla vuelve a Funciones y sin búsqueda.
 function reiniciarVistaExplorar() {
   VISTA_OBJETIVOS = 'funciones';
   BUSQUEDA = '';
+  FILAS_VISIBLES = FILAS_POR_TANDA;
   $('expBuscar').value = '';
 }
 
@@ -156,6 +172,7 @@ function aplicarResumenDemo() {
   RECOMENDACION = null;   // la recomendación sale del backend; la demostración no la inventa
   renderRecomendacion();
   renderOrientacionPruebas(null);
+  renderCompatibilidad(null);
   const modValidos = MODULES.filter(m => !m.error);
   const fns = modValidos.flatMap(m => m.fns);
   const total = fns.length;
@@ -203,6 +220,7 @@ let PROYECTO_E2E_DISPONIBLE = null;
 let PROYECTO_MOTIVO_NO_EJECUTABLE = null;
 
 function mostrarLenguajeProyecto(res = {}) {
+  if (typeof COMPLETAR_CONTEXTO !== 'undefined') COMPLETAR_CONTEXTO = false;
   PROYECTO_NOMBRE_LENGUAJE = res.nombre_lenguaje || 'Python';
   PROYECTO_E2E_DISPONIBLE = typeof res.e2e_humo_disponible === 'boolean' ? res.e2e_humo_disponible : null;
   PROYECTO_MOTIVO_NO_EJECUTABLE = res.motivo_no_ejecutable || null;
@@ -221,6 +239,9 @@ function cargarDatosVistaPrevia(res) {
   PROYECTO_RESUMEN = res.resumen;
   PROYECTO_ERRORES = res.errores || [];
   renderFueraDeLaCorrida(res.fuera_de_la_corrida || []);
+  // Proyecto con más archivos que el tope del recorrido: se avisa que falta revisar parte.
+  $('expParcial').classList.toggle('hide', !res.recorrido_incompleto);
+  $('expParcialTxt').textContent = res.recorrido_incompleto || '';
   RECOMENDACION = res.recomendacion ? {recomendacion: res.recomendacion, proximamente: res.proximamente || []} : null;
   RECO_IA_PENDIENTE = !!res.recomendacion_ia_pendiente;
   renderRecomendacion();
@@ -234,6 +255,7 @@ function cargarDatosVistaPrevia(res) {
       inferible: !!f.inferible,   // issue 275: sin docstring y en Python, el contrato se puede inferir
       noSoportada: f.no_soportada || null,
       orientacion: f.orientacion_prueba || null,
+      compat: f.compatibilidad || null,   // backlog 17: compatible, requiere configuración o no soportado
       br: f.ramas || 0,
       crit: f.critica_propuesta ?? ((f.ramas || 0) > 0),
       inc: !f.no_soportada,
@@ -283,6 +305,8 @@ function cargarDatosVistaPrevia(res) {
 
   MODULES = [...modulosAST, ...modulosErr];
   renderOrientacionPruebas(res.orientacion_pruebas);
+  renderCompatibilidad(res);
+  consultarPreparacion(res.ruta || projectPath);
   actualizarResumenUI(res.resumen, res.errores);
 }
 
@@ -499,6 +523,7 @@ async function cargarProyecto(name, src, where, br='main', ruta='', opciones = {
 function vaciarVistaPrevia() {
   MODULES = [];
   renderOrientacionPruebas(null);
+  renderCompatibilidad(null);
   PROYECTO_MOTIVO_NO_EJECUTABLE = null;
   mostrarLenguajeProyecto();
   reiniciarVistaExplorar();
@@ -573,7 +598,69 @@ function renderOrientacionPruebas(datos){
   $('expOrientacionResumen').textContent = `${r.recomendada || 0} recomendadas · ${r.revisar || 0} para revisar · ${r.no_soportada || 0} fuera del soporte. Tú decides cuáles incluir.`;
   $('expAplicarObjetivos').disabled=!(r.recomendada > 0);
   const metodos=datos.metodos_no_seleccionables || [];
-  $('expMetodosNoDisponibles').innerHTML = metodos.length ? `<details><summary>${metodos.length} ${metodos.length === 1 ? 'método dentro de una clase todavía no seleccionable' : 'métodos dentro de clases todavía no seleccionables'}</summary><p>La lógica puede estar en estos métodos. Probar una fábrica que devuelve el servicio no comprueba sus métodos.</p><ul>${metodos.map(m=>`<li>${escHtml(m.modulo)} · ${escHtml(m.clase)}.${escHtml(m.nombre)}</li>`).join('')}</ul></details>` : '';
+  $('expMetodosNoDisponibles').innerHTML = metodos.length ? `<details><summary>${metodos.length} ${metodos.length === 1 ? 'método dentro de una clase todavía no seleccionable' : 'métodos dentro de clases todavía no seleccionables'}</summary><p>La lógica puede estar en estos métodos. Probar una fábrica que devuelve el servicio no comprueba sus métodos.</p><ul>${metodos.map(m=>`<li>${escHtml(m.modulo)} · ${escHtml(m.clase)}.${escHtml(m.nombre)}${m.motivo ? ' — ' + escHtml(m.motivo) : ''}</li>`).join('')}</ul></details>` : '';
+}
+
+// Backlog 17: compatibilidad por proyecto, módulo y objetivo, antes de gastar tokens.
+const TEXTO_COMPAT = {compatible: 'Compatible', requiere_configuracion: 'Requiere configuración', no_soportado: 'No soportado', aviso: 'Aviso', sin_objetivos: 'Sin objetivos'};
+// «1 requiere configuración», «2 requieren configuración».
+const cuentaCompat = (n, singular, plural) => `${n} ${n === 1 ? singular : plural}`;
+// Cuántos objetivos se listan en el detalle: en un proyecto grande pueden ser miles.
+const MAX_FILAS_COMPAT = 200;
+function listaCompat(singular, plural, filas){
+  if(!filas.length) return '';
+  const titulo = filas.length === 1 ? singular : plural;
+  const visibles = filas.slice(0, MAX_FILAS_COMPAT).map(f => `<li>${escHtml(f.ruta)} · <span class="mono">${escHtml(f.objetivo)}</span> — ${escHtml(f.motivo)}</li>`).join('');
+  const resto = filas.length > MAX_FILAS_COMPAT ? `<li>… y ${filas.length - MAX_FILAS_COMPAT} más.</li>` : '';
+  return `<details><summary>${filas.length} ${titulo}</summary><ul>${visibles}${resto}</ul></details>`;
+}
+function renderCompatibilidad(res){
+  const caja = $('expCompat');
+  if(!caja) return;
+  const c = res && res.compatibilidad;
+  caja.classList.toggle('hide', !c);
+  $('expCompatPreparacion').textContent = '';
+  if(!c) return;
+  const o = c.objetivos || {};
+  $('expCompatResumen').innerHTML = `<b>${escHtml(TEXTO_COMPAT[c.estado] || c.estado)}</b> · `
+    + `${cuentaCompat(o.compatible || 0, 'se puede probar tal como está', 'se pueden probar tal como están')} · `
+    + `${cuentaCompat(o.requiere_configuracion || 0, 'requiere configuración', 'requieren configuración')} · `
+    + cuentaCompat(o.no_soportado || 0, 'no soportado', 'no soportados');
+  $('expCompatRequisitos').innerHTML = (c.requisitos || []).map(r =>
+    `<p class="np-texto"><b>${escHtml(TEXTO_COMPAT[r.estado] || r.estado)}</b> · ${escHtml(r.motivo)}</p>`).join('');
+  const porEstado = {requiere_configuracion: [], no_soportado: []};
+  (res.modulos || []).forEach(m => {
+    [...(m.funciones || []), ...(m.endpoints || [])].forEach(x => {
+      const e = x.compatibilidad;
+      if(e && porEstado[e.estado]) porEstado[e.estado].push({ruta: m.ruta, objetivo: x.nombre || x.objetivo || x.manejador || '', motivo: e.motivo});
+    });
+  });
+  Object.entries(c.modulos || {}).forEach(([ruta, m]) => {
+    (m.fuera || []).forEach(f => porEstado.no_soportado.push({ruta, objetivo: f.objetivo || '', motivo: f.motivo}));
+    if(m.estado === 'no_soportado' && !(m.objetivos && (m.objetivos.no_soportado || m.objetivos.compatible || m.objetivos.requiere_configuracion)))
+      porEstado.no_soportado.push({ruta, objetivo: 'archivo completo', motivo: m.motivo});
+  });
+  $('expCompatDetalle').innerHTML =
+    listaCompat('requiere configuración', 'requieren configuración', porEstado.requiere_configuracion)
+    + listaCompat('no soportado', 'no soportados', porEstado.no_soportado);
+}
+// La preparación consulta Docker: se pide aparte para no retrasar la Vista previa.
+const TEXTO_PREPARACION = {
+  validada: 'Preparación validada', pendiente: 'Preparación pendiente', no_disponible: 'Docker no disponible',
+  bloqueada: 'Preparación bloqueada', desconocida: 'Preparación sin comprobar',
+};
+async function consultarPreparacion(ruta){
+  const el = $('expCompatPreparacion');
+  const api = window.pywebview && window.pywebview.api;
+  if(!el || !(api && api.estado_preparacion)) return;
+  el.textContent = 'Entorno aislado: comprobando…';
+  try {
+    const r = await api.estado_preparacion(ruta);
+    if(rutaComparable(ruta) !== rutaComparable(projectPath)) return;   // ya se abrió otro proyecto
+    el.innerHTML = `<b>${escHtml(TEXTO_PREPARACION[r.estado] || r.estado)}</b> · ${escHtml(r.mensaje || '')}`;
+  } catch (err) {
+    el.textContent = 'Entorno aislado: no se pudo comprobar.';
+  }
 }
 
 function aplicarSeleccionRecomendada(){
@@ -803,6 +890,11 @@ function renderErroresLectura(){
 // Filtra funciones y endpoints por nombre, ruta o archivo. No cambia la selección.
 function buscarObjetivos(texto){
   BUSQUEDA = String(texto || '').trim().toLowerCase();
+  FILAS_VISIBLES = FILAS_POR_TANDA;
+  renderFns();
+}
+function mostrarMasFilas(){
+  FILAS_VISIBLES += FILAS_POR_TANDA;
   renderFns();
 }
 const coincide = (...campos) => !BUSQUEDA || campos.some(c => String(c || '').toLowerCase().includes(BUSQUEDA));
@@ -905,7 +997,7 @@ const endpointVisible = r => coincide(r.e.objetivo, r.e.ruta, r.e.manejador, r.m
 
 function renderEndpoints(){
   const filas = filasEndpoints().filter(endpointVisible);
-  $('endpointTable').innerHTML = filas.map(({m, mi, e, ei}) => {
+  $('endpointTable').innerHTML = filas.slice(0, FILAS_VISIBLES).map(({m, mi, e, ei}) => {
     const elegible = endpointElegible(e);
     const nombreEp = escHtml(e.objetivo || e.manejador || '');
     // Detalle del contrato del endpoint, como descripción emergente del nombre.
@@ -929,9 +1021,9 @@ function renderEndpoints(){
 function renderFns(){
   const fns = filasFunciones(), eps = filasEndpoints();
   const fnsVis = fns.filter(funcionVisible);
-  $('fnTable').innerHTML = fnsVis.map(({m, mi, f, fi}) => `<tr>
+  $('fnTable').innerHTML = fnsVis.slice(0, FILAS_VISIBLES).map(({m, mi, f, fi}) => `<tr>
       <td class="col-incl"><input type="checkbox" class="exp-caja" aria-label="Incluir función: ${escHtml(f.n)}" ${f.inc ? 'checked' : ''} ${f.noSoportada ? `disabled title="${escHtml(f.noSoportada)}"` : ''} onchange="toggle(${mi},${fi},'inc')"></td>
-      <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${!f.noSoportada && tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div>${f.noSoportada ? `<div class="sub" role="note">Fuera del alcance: ${escHtml(f.noSoportada)}</div>` : f.orientacion ? `<div class="sub" role="note"><b>${f.orientacion.categoria === 'recomendada' ? 'Recomendada para empezar' : 'Revisar antes de usar IA'}</b> · ${escHtml(f.orientacion.motivo)}</div>` : ''}</td>
+      <td class="fn" title="${escHtml(f.n + f.sig)}">${escHtml(f.n)}${!f.noSoportada && tieneDocstring(f) === false ? etiquetaSinDocstring('funcion') : ''}<div class="sub">${escHtml(m.path)}</div>${f.noSoportada ? `<div class="sub" role="note">Fuera del alcance: ${escHtml(f.noSoportada)}</div>` : f.compat && f.compat.estado === 'requiere_configuracion' ? `<div class="sub" role="note"><b>Requiere configuración</b> · ${escHtml(f.compat.motivo)}</div>` : f.orientacion ? `<div class="sub" role="note"><b>${f.orientacion.categoria === 'recomendada' ? 'Recomendada para empezar' : 'Revisar antes de usar IA'}</b> · ${escHtml(f.orientacion.motivo)}</div>` : ''}</td>
       <td>${textoComplejidad(f.br)}</td>
       <td>${textoDesdeUltimaVez(m)}</td>
       <td class="col-prof"><input type="checkbox" class="exp-caja" aria-label="Profundizar: ${escHtml(f.n)}" ${f.crit ? 'checked' : ''} ${f.inc ? '' : 'disabled'} title="${f.inc ? 'Profundizar: solicita un análisis más exhaustivo de la función. Se aplica si activas Profundizar en la configuración de pruebas.' : 'Incluye la función para poder profundizar en ella.'}" onchange="toggle(${mi},${fi},'crit')"></td>
@@ -961,8 +1053,12 @@ function renderFns(){
   $('expTodo').indeterminate = marcadas > 0 && marcadas < marcables.length;
   // issue 266 (I1): la diferencia con la pestaña (que cuenta todo lo detectado) se explica aquí.
   const fueraDeCarpetas = Math.max(0, (esFns ? totalFuncionesDetectadas() : totalEndpointsDetectados()) - vistaTodas.length);
-  $('expMostrando').textContent = `Mostrando ${vistaVisibles.length} de ${vistaTodas.length} en las carpetas incluidas`
+  // Las filas dibujadas, no las que coinciden: con tandas, «425 de 425» con 300 a la vista confundía.
+  $('expMostrando').textContent = `Mostrando ${Math.min(vistaVisibles.length, FILAS_VISIBLES)} de ${vistaTodas.length} en las carpetas incluidas`
     + (fueraDeCarpetas ? ` · ${fueraDeCarpetas} más en carpetas no incluidas` : '');
+  const sinDibujar = vistaVisibles.length - FILAS_VISIBLES;
+  $('expMasFilas').hidden = sinDibujar <= 0;
+  if(sinDibujar > 0) $('expMasFilasTxt').textContent = `La tabla muestra las primeras ${FILAS_VISIBLES}; quedan ${sinDibujar} sin dibujar. La selección las incluye a todas: usa la búsqueda para encontrar una. `;
   const sinCambios = vistaVisibles.filter(r => SPEC_STATUS[r.m.path] === 'reuse').length;
   const cambiaron = vistaVisibles.filter(r => SPEC_STATUS[r.m.path] === 'stale').length;
   $('expCambios').textContent = (sinCambios || cambiaron) ? ` · ${sinCambios} sin cambios, ${cambiaron} cambiaron` : '';

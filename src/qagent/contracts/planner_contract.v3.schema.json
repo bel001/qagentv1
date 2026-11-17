@@ -7,6 +7,29 @@
   "additionalProperties": false,
   "required": ["version", "lenguaje", "framework_pruebas", "modulo", "huella", "tipo", "objetivo", "firma", "critical", "casos"],
   "properties": {
+    "contexto_recuperado": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "estado", "motivo", "fuentes", "archivos_revisados"],
+      "properties": {
+        "version": { "const": "1" },
+        "estado": { "enum": ["recuperado", "insuficiente", "contradictorio", "no_soportado"] },
+        "motivo": { "type": "string" },
+        "archivos_revisados": { "type": "array", "maxItems": 33, "uniqueItems": true, "items": { "type": "string" } },
+        "fuentes": {
+          "type": "array", "maxItems": 30,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["archivo", "linea_inicio", "fragmento", "huella"],
+            "properties": {
+              "archivo": { "type": "string", "minLength": 1 },
+              "linea_inicio": { "type": "integer", "minimum": 1 },
+              "fragmento": { "type": "string", "maxLength": 6000 },
+              "huella": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            }
+          }
+        }
+      }
+    },
     "version": { "const": "3" },
     "lenguaje": {
       "enum": ["python", "javascript", "typescript", "java"],
@@ -54,6 +77,20 @@
       "$ref": "#/$defs/nombre_calificado",
       "description": "Símbolo de la aplicación web que el test importa (app de FastAPI o de Express, clase de Spring)."
     },
+    "dependencias_detectadas": {
+      "type": "array",
+      "description": "Depends o Security obtenidos por lectura estática, incluidos alias Annotated importados. No son reemplazos ni valores esperados.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["parametro", "funcion", "en_proyecto"],
+        "properties": {
+          "parametro": { "type": ["string", "null"] },
+          "funcion": { "type": ["string", "null"] },
+          "en_proyecto": { "type": ["string", "null"] }
+        }
+      }
+    },
     "dependencias": {
       "type": "array",
       "items": { "$ref": "#/$defs/dependencia" },
@@ -77,6 +114,17 @@
       "uniqueItems": true,
       "description": "Solo en `integracion` (#245): módulos de efecto (red, archivos, hora, azar…) que usa la raíz y que el test debe simular. Las funciones internas de efecto van en `llama_a`."
     },
+    "metodo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clase", "tipo"],
+      "description": "Backlog 11 (ADR-017): el objetivo Python es un método `Clase.metodo`. `tipo` dice cómo se llama; con `instancia`, cada caso lleva `constructor` y aquí va la firma del constructor.",
+      "properties": {
+        "clase": { "$ref": "#/$defs/identificador_python" },
+        "tipo": { "enum": ["instancia", "estatico", "clase"] },
+        "constructor": { "type": "string", "minLength": 1 }
+      }
+    },
     "casos": {
       "type": "array",
       "minItems": 1,
@@ -84,6 +132,14 @@
     }
   },
   "allOf": [
+    {
+      "if": { "required": ["contexto_recuperado"] },
+      "then": { "properties": { "lenguaje": { "enum": ["javascript", "typescript"] }, "tipo": { "const": "funcion" } } }
+    },
+    {
+      "if": { "required": ["dependencias_detectadas"] },
+      "then": { "properties": { "lenguaje": { "const": "python" }, "tipo": { "const": "endpoint" } } }
+    },
     {
       "description": "Python: pytest y FastAPI; los nombres son identificadores de Python (igual que v2).",
       "if": { "properties": { "lenguaje": { "const": "python" } } },
@@ -121,7 +177,19 @@
         "required": ["tipo", "lenguaje"],
         "properties": { "tipo": { "const": "funcion" }, "lenguaje": { "const": "python" } }
       },
-      "then": { "properties": { "objetivo": { "$ref": "#/$defs/identificador_python" } } }
+      "then": { "properties": { "objetivo": { "$ref": "#/$defs/objetivo_python" } } }
+    },
+    {
+      "description": "ADR-017: un objetivo Python con punto es un método y debe declarar `metodo` (clase y cómo se llama). Sin eso, un nombre calificado no es válido.",
+      "if": {
+        "required": ["tipo", "lenguaje", "objetivo"],
+        "properties": {
+          "tipo": { "const": "funcion" },
+          "lenguaje": { "const": "python" },
+          "objetivo": { "pattern": "\\." }
+        }
+      },
+      "then": { "required": ["metodo"] }
     },
     {
       "if": {
@@ -130,7 +198,7 @@
       },
       "then": {
         "properties": {
-          "objetivo": { "$ref": "#/$defs/nombre_calificado" },
+          "objetivo": { "$ref": "#/$defs/objetivo_metodo" },
           "casos": {
             "items": { "not": { "required": ["tipo_valor_esperado"] } }
           }
@@ -188,6 +256,16 @@
     "identificador_python": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+    },
+    "objetivo_python": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)?$",
+      "description": "Función de nivel superior (`calcular`) o método de una clase de nivel superior (`Carrito.total`, ADR-017)."
+    },
+    "objetivo_metodo": {
+      "type": "string",
+      "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*(\\(([A-Za-z_$][A-Za-z0-9_$]*(\\[\\])*(,[A-Za-z_$][A-Za-z0-9_$]*(\\[\\])*)*)?\\))?$",
+      "description": "Clase.metodo, o Clase.metodo(T1,T2) si el método está sobrecargado (backlog 2): tipos con su nombre simple, sin genéricos y con [] para arrays y varargs."
     },
     "nombre_calificado": {
       "type": "string",
@@ -372,7 +450,11 @@
           "items": { "type": "string", "minLength": 1 },
           "description": "Solo con origen `inferido`: fuentes estáticas que respaldan el caso (`cuerpo`, `dependencia:<símbolo>`, `llamador:<ruta>::<función>`, `test_existente:<ruta>::<test>`)."
         },
-        "categoria": { "enum": ["normal", "limite", "error"] }
+        "categoria": { "enum": ["normal", "limite", "error"] },
+        "constructor": {
+          "type": "object",
+          "description": "Solo en métodos de instancia (ADR-017): argumentos por nombre con que se construye la clase. Salen de la firma y la documentación del constructor, igual que `entrada`."
+        }
       }
     }
   }

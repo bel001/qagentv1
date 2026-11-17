@@ -284,6 +284,82 @@ class _AdaptadorNode(AdaptadorEnDesarrollo):
 
         return ReglasRevisionVitest(self.lenguaje)
 
+    contexto_automatico_disponible = True
+
+    def completar_contexto(
+        self, raiz: Path, modulos: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Recupera ejemplos documentados en las fuentes, README y docs (ADR-018)."""
+        from qagent.lenguajes.javascript_contexto import completar_modulos
+
+        return completar_modulos(raiz, modulos)
+
+    def contexto_de_funcion(self, funcion: dict[str, Any]) -> dict[str, Any]:
+        """Procedencia de la documentación recuperada, sin valores inventados."""
+        contexto = funcion.get("contexto_recuperado")
+        return {"contexto_recuperado": contexto} if contexto else {}
+
+    def motivo_funcion_no_soportada(self, funcion: dict[str, Any]) -> str | None:
+        """Un iterador requiere un contrato de consumo, no una igualdad con un escalar."""
+        from qagent.lenguajes.javascript_contexto import MOTIVO_GENERADOR
+
+        return MOTIVO_GENERADOR if funcion.get("es_generador") else None
+
+    def motivo_funcion_no_planificable(self, funcion: dict[str, Any]) -> str | None:
+        """No consulta al modelo si las fuentes todavía no fijan ningún resultado."""
+        from qagent.lenguajes.javascript_planificacion import (
+            tiene_evidencia_verificable,
+        )
+
+        if funcion.get("contexto_recuperado") and not tiene_evidencia_verificable(
+            funcion
+        ):
+            return "Sin resultado esperado verificable; no se consumieron tokens para esta función."
+        return None
+
+    def contexto_spec_vigente(
+        self, contrato: dict[str, Any], modulo: dict[str, Any]
+    ) -> bool:
+        """No reutiliza casos documentales si cambian las fuentes o se desactiva la opción."""
+        if not contrato.get("contexto_recuperado"):
+            return True
+        funcion = next(
+            (
+                f
+                for f in modulo.get("funciones", [])
+                if f["nombre"] == contrato["objetivo"]
+            ),
+            {},
+        )
+        return contrato["contexto_recuperado"] == funcion.get("contexto_recuperado")
+
+    def validar_oraculo(
+        self, contrato: dict[str, Any], codigo: str, ruta_proyecto: Path
+    ) -> str | None:
+        """Revalida fuentes recuperadas antes de ejecutar, además de las aserciones."""
+        if contrato.get("contexto_recuperado"):
+            from qagent.lenguajes.javascript_contexto import reconstruir_contexto
+            from qagent.lenguajes.javascript_generacion import _funcion_del_proyecto
+            from qagent.lenguajes.javascript_oraculo import oraculo_del_caso
+
+            funcion = _funcion_del_proyecto(contrato, ruta_proyecto)
+            if funcion is None:
+                return (
+                    "No se pudo releer la función para validar su contexto documental."
+                )
+            funcion["evidencias"] = registro_de_evidencias(funcion, contrato["modulo"])
+            try:
+                funcion = reconstruir_contexto(ruta_proyecto, contrato, funcion)
+            except (OSError, ValueError) as error:
+                return str(error)
+            for caso in contrato["casos"]:
+                _, motivo = oraculo_del_caso(
+                    self.lenguaje, contrato["modulo"], funcion, caso
+                )
+                if motivo:
+                    return motivo
+        return self.reglas_revision().validar_oraculo(contrato, codigo)
+
     def archivo_de_prueba(self, objetivo: str) -> str:
         """``generado.test.ts`` o ``generado.test.js``: cada prueba corre aislada."""
         from qagent.lenguajes.javascript_generacion import archivo_vitest

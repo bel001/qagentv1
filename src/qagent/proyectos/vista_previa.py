@@ -46,9 +46,11 @@ from qagent.lenguajes import (
     LenguajeNoSoportado,
     adaptador_del_proyecto,
     adaptador_e2e_del_proyecto,
+    aviso_recorrido_incompleto,
     fuera_de_la_corrida,
 )
 from qagent.llm.tracker import TokenTracker
+from qagent.proyectos.compatibilidad import evaluar as evaluar_compatibilidad
 from qagent.proyectos.orientacion import orientar_funcion, resumir_orientacion
 
 _log = logging.getLogger(__name__)
@@ -273,6 +275,9 @@ def generar_vista_previa(
             funciones_mod.append(
                 {
                     **f,
+                    # El motivo del adaptador (p. ej. varargs en Java), para que la
+                    # interfaz no la ofrezca como seleccionable.
+                    "no_soportada": no_soportada,
                     "orientacion_prueba": orientar_funcion(f, no_soportada),
                     "aviso_docstring": aviso_doc,
                     "etiqueta_docstring": etiqueta_doc,
@@ -284,8 +289,14 @@ def generar_vista_previa(
                     ),
                     # Se puede inferir (Python sin docstring); que se haga lo decide la
                     # casilla de Preparar, con `inferencia_activa` como valor inicial.
-                    "inferible": doc is None and es_python and not no_soportada,
-                    "critica_propuesta": f.get("ramas", 0) > 0 and not no_soportada,
+                    # ADR-017: los métodos todavía no se infieren ni se mutan.
+                    "inferible": doc is None
+                    and es_python
+                    and not no_soportada
+                    and not f.get("tipo_metodo"),
+                    "critica_propuesta": f.get("ramas", 0) > 0
+                    and not no_soportada
+                    and not f.get("tipo_metodo"),
                 }
             )
         # #74: un endpoint con decisiones en su manejador se propone para profundizar,
@@ -307,6 +318,15 @@ def generar_vista_previa(
 
     # Priorización: primero los módulos con más funciones con ramas (criterio 7)
     modulos_priorizados = priorizar_modulos(modulos_procesados)
+    # Backlog 17: qué se puede probar tal como está, antes de gastar tokens.
+    compatibilidad = evaluar_compatibilidad(
+        carpeta,
+        adaptador,
+        modulos_priorizados,
+        resultado_ast["errores"],
+        inferencia_activa=infiere,
+        limite_inferencia=_limite_inferencia() if infiere else None,
+    )
 
     # Errores con su etiqueta "no se pudo analizar" (criterio 5)
     errores_procesados = [
@@ -332,6 +352,7 @@ def generar_vista_previa(
         "motivo_no_ejecutable": adaptador.motivo_no_ejecutable(carpeta),
         "modulos": modulos_priorizados,
         "orientacion_pruebas": resumir_orientacion(modulos_priorizados),
+        "compatibilidad": compatibilidad,
         "errores": errores_procesados,
         "resumen": resultado_ast["resumen"],
         # #171: React se prueba; otro framework de interfaz se avisa como
@@ -339,6 +360,8 @@ def generar_vista_previa(
         "framework_ui": resultado_ast.get("framework_ui"),
         # EP-11: con .js y .ts juntos, los archivos del lenguaje no elegido se avisan.
         "fuera_de_la_corrida": fuera_de_la_corrida(carpeta, adaptador),
+        # Más archivos que el tope del recorrido: la exploración es parcial y se dice.
+        "recorrido_incompleto": aviso_recorrido_incompleto(carpeta),
         "avisos": {
             "oraculo_debil": AVISO_ORACULO_DEBIL,
             "falta_docstring": ETIQUETA_FALTA_DOCSTRING,

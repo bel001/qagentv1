@@ -117,7 +117,18 @@ def _spec_de_modulo(
             for c in contratos
         ]
     else:
-        perfiles.update({c["objetivo"]: perfil for c in contratos})
+        # Los que salieron de la spec vigente conservan su contrato guardado y el
+        # perfil con que se crearon; solo los planificados ahora llevan el de hoy.
+        vigentes = preparado.reutilizados
+        contratos = [
+            {**preparado.completos.get(c["objetivo"], c), "critical": c["critical"]}
+            if c["objetivo"] in vigentes
+            else c
+            for c in contratos
+        ]
+        perfiles.update(
+            {c["objetivo"]: perfil for c in contratos if c["objetivo"] not in vigentes}
+        )
     if contratos and preparado.plan_guardado is not None:
         contratos = _combinar_plan(preparado.plan_guardado["contratos"], contratos)
     validos = [c for c in contratos if contracts.es_planner_valido(c)]
@@ -137,10 +148,11 @@ def _spec_de_modulo(
 
 
 def _objetivos_de(modulo: dict[str, Any]) -> set[str]:
-    """Funciones y endpoints planificables que la selección dejó en el módulo.
+    """Funciones, endpoints, componentes e integraciones que la selección dejó.
 
     Un endpoint sin ruta resuelta no se planifica (el Planner lo omite), así que no
-    cuenta como faltante en la spec.
+    cuenta como faltante en la spec. Los componentes React (#171) sí cuentan: sin
+    ellos, una spec reutilizada dejaba de probarlos en la corrida siguiente.
     """
     funciones = {
         f["nombre"]
@@ -153,7 +165,10 @@ def _objetivos_de(modulo: dict[str, Any]) -> set[str]:
         if e.get("objetivo") and e.get("resuelta", True)
     }
     integraciones = {i["objetivo"] for i in modulo.get("integraciones") or []}
-    return funciones | endpoints | integraciones
+    componentes = {
+        c["nombre"] for c in modulo.get("componentes") or [] if c.get("nombre")
+    }
+    return funciones | endpoints | integraciones | componentes
 
 
 def _combinar_plan(
@@ -361,6 +376,7 @@ def _registrar(
                 *(no_soportados or []),
             ],
             fuera_de_la_corrida=fuera_de_la_corrida,
+            contexto_automatico=resumen.contexto_automatico or None,
         )
         resumen.run_id = rutas.run_id
         resumen.carpeta = str(rutas.carpeta)

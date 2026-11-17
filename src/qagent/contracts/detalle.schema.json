@@ -7,6 +7,40 @@
   "additionalProperties": false,
   "required": ["version", "tipo", "run_id", "entorno", "totales_casos", "funciones"],
   "properties": {
+    "contexto_automatico": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["modulo", "objetivo", "contexto"],
+        "properties": {
+          "modulo": { "type": "string" },
+          "objetivo": { "type": "string" },
+          "contexto": {
+            "type": "object", "additionalProperties": false,
+            "required": ["version", "estado", "motivo", "fuentes", "archivos_revisados"],
+            "properties": {
+              "version": { "const": "1" },
+              "estado": { "enum": ["recuperado", "insuficiente", "contradictorio", "no_soportado"] },
+              "motivo": { "type": "string" },
+              "archivos_revisados": { "type": "array", "maxItems": 33, "uniqueItems": true, "items": { "type": "string" } },
+              "fuentes": {
+                "type": "array", "maxItems": 30,
+                "items": {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["archivo", "linea_inicio", "fragmento", "huella"],
+                  "properties": {
+                    "archivo": { "type": "string", "minLength": 1 },
+                    "linea_inicio": { "type": "integer", "minimum": 1 },
+                    "fragmento": { "type": "string", "maxLength": 6000 },
+                    "huella": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "version": { "const": "1" },
     "tipo": { "const": "detalle" },
     "run_id": { "type": "string", "minLength": 1 },

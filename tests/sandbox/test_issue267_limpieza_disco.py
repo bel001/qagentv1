@@ -28,6 +28,20 @@ AHORA = datetime(2026, 10, 18, 12, 0, tzinfo=timezone.utc).timestamp()
 DIA = 24 * 60 * 60
 GB = BYTES_POR_GB
 BASE_CAPAS = ["sha256:b1", "sha256:b2"]
+
+
+@pytest.fixture(autouse=True)
+def _reloj_fijo(monkeypatch):
+    """Las fechas de las imágenes se miden contra `AHORA`, no contra el día real.
+
+    Sin esto, una imagen «creada hace 1 día» respecto de `AHORA` envejece con el
+    calendario y la limpieza por falta de uso termina borrándola.
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(limpieza, "time", SimpleNamespace(time=lambda: AHORA))
+
+
 FILTRO_CONSTRUCCION = [f"{k}={v}" for k, v in ETIQUETA_CONSTRUCCION.items()]
 
 

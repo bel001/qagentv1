@@ -14,11 +14,14 @@ from typing import Any
 from qagent.analysis import arbol_ts, texto_ts
 
 
-def huellas_de_archivo(fuente: str, relativa: str) -> dict[str, str] | None:
+def huellas_de_archivo(
+    fuente: str, relativa: str, *, metodos: bool = False
+) -> dict[str, str] | None:
     """Huella de cada función pública y de cada ruta declarada del archivo.
 
     La huella sale del árbol de tree-sitter (``huella_de_definicion``, versión 2
-    desde TA-16). None si el archivo tiene errores de sintaxis.
+    desde TA-16). None si el archivo tiene errores de sintaxis. Con ``metodos``
+    (ADR-017) suma ``Clase.metodo`` de cada método público (ver `_huellas_metodos`).
     """
     try:
         arbol = arbol_ts.parsear(fuente)
@@ -36,6 +39,63 @@ def huellas_de_archivo(fuente: str, relativa: str) -> dict[str, str] | None:
             resultado[nombre] = huella
         for camino_ruta in _rutas_declaradas(funcion):
             resultado[camino_ruta] = huella
+    if metodos:
+        resultado.update(_huellas_metodos(arbol))
+    return resultado
+
+
+def _huellas_metodos(arbol: Any) -> dict[str, str]:
+    """Huella de cada método público: el método y lo que define cómo se construye.
+
+    Cambiar el constructor, los campos de la clase, sus bases o sus decoradores
+    cambia el objeto con que se prueba el método: invalida su prueba guardada.
+    Cambiar otro método de la misma clase no.
+    """
+    import hashlib
+
+    from qagent.analysis.rutas import sentencias_modulo
+
+    resultado: dict[str, str] = {}
+    for nodo in sentencias_modulo(arbol.root_node):
+        if not arbol_ts.es_clase(nodo):
+            continue
+        clase = arbol_ts.definicion(nodo)
+        nombre_clase = arbol_ts.nombre(clase)
+        if nombre_clase.startswith("_"):
+            continue
+        contexto = hashlib.sha256()
+        superclases = clase.child_by_field_name("superclasses")
+        contexto.update(arbol_ts.texto(superclases).encode() if superclases else b"")
+        for decorador in arbol_ts.decoradores(clase):
+            contexto.update(arbol_ts.texto(decorador).encode())
+        miembros = arbol_ts.sentencias(arbol_ts.cuerpo(clase))
+        for miembro in miembros:
+            es_init = (
+                arbol_ts.es_funcion(miembro)
+                and arbol_ts.nombre(arbol_ts.definicion(miembro)) == "__init__"
+            )
+            if es_init:
+                contexto.update(
+                    arbol_ts.huella_de_definicion(arbol_ts.definicion(miembro)).encode()
+                )
+            elif not arbol_ts.es_funcion(miembro) and miembro.type != "comment":
+                contexto.update(arbol_ts.texto(miembro).encode())
+        for miembro in miembros:
+            if not arbol_ts.es_funcion(miembro):
+                continue
+            metodo = arbol_ts.definicion(miembro)
+            nombre = arbol_ts.nombre(metodo)
+            if nombre.startswith("_"):
+                continue
+            huella = hashlib.sha256(
+                (
+                    "python-metodo-v1\0"
+                    + arbol_ts.huella_de_definicion(metodo)
+                    + "\0"
+                    + contexto.hexdigest()
+                ).encode()
+            ).hexdigest()
+            resultado[f"{nombre_clase}.{nombre}"] = huella
     return resultado
 
 

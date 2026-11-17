@@ -1,0 +1,8 @@
+.contexto-modal{max-height:calc(100dvh - 32px);display:flex;flex-direction:column}
+.contexto-modal .mcontent{overflow:auto;min-height:0;font-size:var(--texto-cuerpo);line-height:1.55}
+.contexto-modal .mcontent p{margin:0}
+.contexto-modal .mhead,.contexto-modal .mfoot{flex-shrink:0}
+.contexto-objetivos{margin:0;padding-left:20px;overflow-wrap:anywhere}
+.contexto-objetivos li+li{margin-top:var(--esp-3)}
+.contexto-modal .mfoot{flex-wrap:wrap}
+@media(max-width:480px){.contexto-modal .mfoot .btn{flex:1 1 100%;white-space:normal}.contexto-modal .mcontent{padding:16px}}

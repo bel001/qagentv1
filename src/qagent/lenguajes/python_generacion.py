@@ -21,6 +21,7 @@ from qagent.analysis.contexto import (
     ContextoFuncion,
     contexto_de_funcion,
 )
+from qagent.lenguajes.python_endpoints import montaje_endpoint
 from qagent.llm.fake import MARCA_CONTRATO
 
 
@@ -33,12 +34,49 @@ def prompt_generator(
     """Prompt del test pytest de ``contrato``; ``feedback`` ya viene recortado."""
     contexto = _contexto(contrato, ruta_proyecto)
     texto_dependencias = _contexto_dependencias(contrato, ruta_proyecto)
+    if contrato.get("tipo") == "endpoint":
+        texto_dependencias += _contexto_depends(contrato, ruta_proyecto)
     return crear_prompt(
         contrato,
         intento,
         feedback,
         contexto,
         texto_dependencias=texto_dependencias,
+    )
+
+
+def _contexto_depends(contrato: dict[str, Any], raiz: Path | None) -> str:
+    """Firmas de Depends detectados, aunque no haya un doble declarado todavía."""
+    lineas = []
+    for dependencia in contrato.get("dependencias_detectadas", [])[:10]:
+        referencia = dependencia.get("en_proyecto")
+        if not referencia or "::" not in referencia or raiz is None:
+            continue
+        archivo, funcion = referencia.rsplit("::", 1)
+        try:
+            if not (raiz / archivo).resolve().is_relative_to(raiz.resolve()):
+                continue
+        except (OSError, ValueError):
+            continue
+        contexto = contexto_de_funcion(raiz, archivo, funcion)
+        if contexto is None:
+            continue
+        partes = PurePosixPath(archivo).parts
+        if "src" in partes:
+            indice = max(i for i, parte in enumerate(partes) if parte == "src")
+            partes = partes[indice + 1 :]
+        modulo = modulo_importable("/".join(partes))
+        lineas.append(
+            f"Dependencia del parámetro {dependencia.get('parametro')}: "
+            f"{referencia}. Callable de override: {modulo}.{funcion}.\n"
+            f"Imports: {chr(10).join(contexto.imports)}\n{contexto.codigo[:2000]}"
+        )
+        if sum(len(linea) for linea in lineas) >= 6000:
+            break
+    if not lineas:
+        return ""
+    return (
+        "\nDEPENDS DETECTADOS (solo para preparar dobles):\n" + "\n".join(lineas)[:6000]
     )
 
 
@@ -55,7 +93,7 @@ def _contexto_dependencias(contrato: dict[str, Any], ruta_proyecto: Path | None)
         nombre_simbolo = (
             contrato.get("manejador")
             if contrato.get("tipo") == "endpoint" and contrato.get("manejador")
-            else funcion_probada(contrato)
+            else nombre_importado(contrato)
         )
         grafo = construir_grafo_dependencias(
             ruta_proyecto,
@@ -71,19 +109,30 @@ def _contexto_dependencias(contrato: dict[str, Any], ruta_proyecto: Path | None)
 def _contexto(
     contrato: dict[str, Any], ruta_proyecto: Path | None
 ) -> ContextoFuncion | None:
-    """Contexto del módulo de una función (los endpoints ya traen su declaración)."""
-    if ruta_proyecto is None or contrato.get("tipo") == "endpoint":
+    """Contexto estático para importar y simular funciones o manejadores de rutas."""
+    if ruta_proyecto is None:
         return None
     return contexto_de_funcion(
-        ruta_proyecto, contrato["modulo"], funcion_probada(contrato)
+        ruta_proyecto,
+        contrato["modulo"],
+        contrato.get("manejador") or funcion_probada(contrato),
     )
 
 
 def funcion_probada(contrato: dict[str, Any]) -> str:
-    """Función que importa y llama el test: el objetivo, o la raíz de una integración."""
+    """Función que llama el test: el objetivo (``Clase.metodo`` en un método), o la
+    raíz de una integración."""
     if contrato.get("tipo") == "integracion":
         return str(contrato["cadena"][0])
     return str(contrato["objetivo"])
+
+
+def nombre_importado(contrato: dict[str, Any]) -> str:
+    """Lo que el test importa del módulo: la función, o la clase de un método."""
+    metodo = contrato.get("metodo")
+    if isinstance(metodo, dict) and metodo.get("clase"):
+        return str(metodo["clase"])
+    return funcion_probada(contrato)
 
 
 def crear_prompt(
@@ -101,6 +150,10 @@ def crear_prompt(
     regla_simulacion = "- Simula con mocks las funciones incluidas en llama_a."
     if contrato.get("tipo") == "endpoint":
         reglas_objetivo = _reglas_endpoint(contrato)
+    elif isinstance(contrato.get("metodo"), dict):
+        reglas_objetivo = _reglas_metodo(contrato)
+        if contexto is not None:
+            reglas_objetivo += "\n" + _reglas_contexto(contrato)
     elif contrato.get("tipo") == "integracion":
         reglas_objetivo = _reglas_integracion(contrato)
         regla_simulacion = (
@@ -143,6 +196,35 @@ FEEDBACK DEL INTENTO ANTERIOR:
 {_texto_contexto(contexto)}
 {texto_dependencias}
 {MARCA_CONTRATO} {contrato_json}
+""".strip()
+
+
+def _reglas_metodo(contrato: dict[str, Any]) -> str:
+    """Reglas de una prueba de un método de clase (ADR-017)."""
+    metodo = contrato["metodo"]
+    clase = metodo["clase"]
+    nombre = str(contrato["objetivo"]).split(".", 1)[1]
+    importacion = f"from {modulo_importable(contrato['modulo'])} import {clase}"
+    if metodo["tipo"] == "instancia":
+        constructor = metodo.get("constructor") or f"{clase}()"
+        llamada = "\n".join(
+            [
+                (
+                    '- En cada test construye el objeto con el "constructor" del caso, '
+                    "por nombre:"
+                ),
+                f"  objeto = {clase}(**constructor), y llama objeto.{nombre}(**entrada).",
+                f"  Constructor declarado: {constructor}",
+            ]
+        )
+    else:
+        llamada = f"- Llama directamente {clase}.{nombre}(**entrada), sin construir el objeto."
+    return f"""
+- Importa la clase exactamente así: {importacion}
+{llamada}
+- Para un caso con "excepcion" usa with pytest.raises(<Excepcion>) solo alrededor de
+  la llamada al método, no de la construcción del objeto.
+- El valor esperado sale del contrato, nunca del código del método ni de la clase.
 """.strip()
 
 
@@ -198,28 +280,38 @@ Código de la función:
 
 def _reglas_endpoint(contrato: dict[str, Any]) -> str:
     """Reglas de generación para un endpoint FastAPI descrito por el contrato."""
-    modulo = modulo_importable(contrato["modulo"])
-    aplicacion = contrato["aplicacion"]
     dependencias = contrato.get("dependencias", [])
-    simbolos = [aplicacion]
-    for dependencia in dependencias:
-        simbolos.extend([dependencia["funcion"], dependencia["reemplazo"]])
-    importacion = f"from {modulo} import {', '.join(dict.fromkeys(simbolos))}"
     detalle_overrides = (
         json.dumps(dependencias, ensure_ascii=False)
         if dependencias
-        else "[] (este endpoint no declara Depends)"
+        else "[] (sin reemplazos declarados; puede haber dependencias importadas)"
     )
     return f"""
 - Usa fastapi.testclient.TestClient para realizar una petición HTTP real en memoria.
-- Importa la aplicación y los símbolos de override exactamente así: {importacion}
-- Construye TestClient({aplicacion}, raise_server_exceptions=False).
+- Usa literalmente esta plantilla de imports, montaje y cliente (incluye el prefijo
+  completo del contrato y las rutas src/; APIRouter no tiene dependency_overrides):
+```python
+{montaje_endpoint(contrato)}
+```
+- Todos los dependency_overrides pertenecen a app_pruebas, nunca al APIRouter.
+- Conserva las excepciones internas visibles para diagnosticar errores de montaje;
+  no cambies raise_server_exceptions a False para convertirlas en un 500 opaco.
 - Usa client.request con método, ruta, query, json y headers del contrato.
 - Comprueba siempre response.status_code.
 - Si valor_esperado trae "json", compara response.json() completo.
 - Si trae "json_contiene", comprueba cada clave y valor indicados.
 - Dependencias a reemplazar: {detalle_overrides}
-- Para cada dependencia asigna {aplicacion}.dependency_overrides[funcion] = reemplazo.
+- "dependencias_detectadas" contiene los Depends encontrados estáticamente, incluidos
+  los importados; no los confundas con parámetros de consulta ni los omitas por no
+  aparecer en la lista de reemplazos. El contexto indica su callable de override.
+- Para cada dependencia asigna app_pruebas.dependency_overrides[funcion] = reemplazo.
+- Consulta también las anotaciones importadas (por ejemplo RequiredSession): pueden
+  ser alias Annotated[Usuario, Depends(require_session)]. Reemplaza el callable real
+  de Depends, no el alias de tipo ni todas las dependencias con un MagicMock genérico.
+- Simula servicios externos sin red ni base de datos real. Para llamadas con await
+  usa AsyncMock o async def, con el tipo de retorno que espera el manejador.
+- El CONTEXTO DEL MÓDULO sirve solo para preparar estas dependencias; no deduzcas
+  valores esperados de él. Conserva los valores del contrato.
 - Si una entrada trae "preparacion", instancia el reemplazo una vez en la fixture,
   ejecuta allí cada método/modelo/argumentos declarado y usa un lambda que devuelva
   esa misma instancia durante el test.

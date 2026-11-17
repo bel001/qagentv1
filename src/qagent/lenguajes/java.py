@@ -4,7 +4,7 @@ Solo lee fuentes UTF-8: no importa, compila ni ejecuta el proyecto analizado.
 Extrae clases, constructores, métodos públicos, Javadoc y decisiones (#181). Excluye
 src/test, carpetas generadas y enlaces simbólicos. Resuelve llamadas explícitas
 del proyecto sin inferir tipos ni despacho dinámico. Extrae declaraciones de
-endpoints Spring (#183); no admite sobrecargas. La generación usa el contrato del Planner y el
+endpoints Spring (#183); las sobrecargas quedan fuera con su motivo. La generación usa el contrato del Planner y el
 guardrail valida aserciones sin ejecutar Java ni consultar IA. Lee informes JUnit
 XML y ejecuta Maven/JUnit/JaCoCo y mutación PIT acotada exclusivamente dentro del
 sandbox (#182, #180).
@@ -34,6 +34,7 @@ from qagent.lenguajes.base import (
 )
 from qagent.lenguajes.java_cobertura import leer_jacoco
 from qagent.lenguajes.java_estructura import contar_decisiones, desglosar_javadoc
+from qagent.lenguajes.java_identidad import identidad
 from qagent.lenguajes.java_junit import interpretar_junit_java
 from qagent.lenguajes.java_llamadas import agregar_llamadas
 from qagent.lenguajes.java_spring import extraer_endpoints
@@ -144,16 +145,43 @@ def _tiene_dependencias_inyectadas(constructores: list[dict[str, Any]]) -> bool:
     return False
 
 
+#: Por qué un método con varargs no se planifica (backlog 14 lo ampliará).
+MOTIVO_VARARGS = (
+    "tiene un parámetro varargs (por ejemplo int...): el validador de pruebas Java "
+    "todavía necesita parámetros fijos"
+)
+#: Por qué una sobrecarga no es un objetivo: dos versiones quedan con la misma
+#: identidad (tipos con el mismo nombre simple en paquetes distintos).
+MOTIVO_SOBRECARGA = (
+    "hay otra versión de este método cuyos parámetros tienen los mismos nombres de "
+    "tipo (de paquetes distintos): QAgent no puede distinguirlas sin adivinar"
+)
+
+
 def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Clases y métodos públicos que pueden ser objetivos (ver `_declaraciones_java`)."""
+    clases, funciones, _ = _declaraciones_java(raiz)
+    return clases, funciones
+
+
+def _declaraciones_java(
+    raiz: Node,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Extrae clases y métodos públicos, sin entrar en cuerpos de métodos.
 
-    Los constructores se describen dentro de su clase, sin ser objetivos.
-    Rechaza nombres de métodos duplicados por sobrecarga para evitar objetivos
-    ambiguos en el contrato Clase.metodo.
+    Los constructores se describen dentro de su clase, sin ser objetivos. Un método
+    sobrecargado se identifica con los tipos de sus parámetros
+    (``Clase.metodo(String,int)``, ver `java_identidad`); los demás conservan
+    ``Clase.metodo``. Si dos sobrecargas quedan con la misma identidad, ninguna es
+    objetivo y se devuelven aparte con su clase, firma, línea y motivo.
+
+    Returns:
+        (clases, métodos que son objetivos, sobrecargas que quedaron fuera).
     """
     clases: list[dict[str, Any]] = []
     funciones: list[dict[str, Any]] = []
-    nombres: set[str] = set()
+    #: Declaraciones públicas por objetivo, también las abstractas (sin cuerpo).
+    declaradas: dict[str, list[dict[str, Any]]] = {}
 
     def visitar(contenedor: Node, prefijo: str = "") -> None:
         for nodo in contenedor.named_children:
@@ -208,13 +236,19 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 )
                 if not publico:
                     continue
-                objetivo = nombre + "." + _texto(metodo.child_by_field_name("name"))
-                if objetivo in nombres:
-                    raise ValueError(
-                        f"Sobrecarga no admitida en el prototipo: {objetivo}"
-                    )
-                nombres.add(objetivo)
+                nombre_metodo = _texto(metodo.child_by_field_name("name")) or ""
+                objetivo = nombre + "." + nombre_metodo
                 parametros = _parametros(metodo)
+                tipos = ", ".join(str(p.get("tipo") or "?") for p in parametros)
+                declaradas.setdefault(objetivo, []).append(
+                    {
+                        "clase": nombre,
+                        "nombre": f"{nombre_metodo}({tipos})",
+                        "linea": metodo.start_point.row + 1,
+                        "motivo": MOTIVO_SOBRECARGA,
+                        "identidad": identidad(objetivo, parametros),
+                    }
+                )
                 retorno = _texto(metodo.child_by_field_name("type"))
                 cuerpo_metodo = metodo.child_by_field_name("body")
                 if cuerpo_metodo is None:
@@ -253,7 +287,25 @@ def _declaraciones(raiz: Node) -> tuple[list[dict[str, Any]], list[dict[str, Any
                 )
 
     visitar(raiz)
-    return clases, funciones
+    sobrecargados = {o for o, lista in declaradas.items() if len(lista) > 1}
+    colisiones: set[str] = set()
+    sobrecargas: list[dict[str, Any]] = []
+    for objetivo in sobrecargados:
+        identidades = [d["identidad"] for d in declaradas[objetivo]]
+        repetidas = {i for i in identidades if identidades.count(i) > 1}
+        colisiones |= repetidas
+        sobrecargas.extend(
+            {k: v for k, v in d.items() if k != "identidad"}
+            for d in declaradas[objetivo]
+            if d["identidad"] in repetidas
+        )
+    sobrecargas.sort(key=lambda d: (d["linea"], d["nombre"]))
+    # Backlog 2: cada sobrecarga es un objetivo propio, identificado por su firma.
+    for funcion in funciones:
+        if funcion["nombre"] in sobrecargados:
+            funcion["nombre"] = identidad(funcion["nombre"], funcion["parametros"])
+    funciones = [f for f in funciones if f["nombre"] not in colisiones]
+    return clases, funciones, sobrecargas
 
 
 def _constructores(clase: Node, nombre: str) -> list[dict[str, Any]]:
@@ -321,8 +373,10 @@ class JavaAdapter(AdaptadorEnDesarrollo):
         La huella incluye nombre, ruta y fuente completa: cambios de campos,
         imports o métodos auxiliares también invalidan la caché para evitar
         reutilizar un score con un contexto distinto. Es conservadora: incluso
-        un comentario puede forzar otra ejecución. Sintaxis inválida o nombres
-        ambiguos devuelven None; nunca se reutiliza un resultado por conjetura.
+        un comentario puede forzar otra ejecución. Sintaxis inválida devuelve None;
+        cada sobrecarga tiene su propia huella con su identidad (backlog 2) y las
+        que no se pueden distinguir no reciben ninguna: nunca se reutiliza un
+        resultado por conjetura.
         """
         arbol = obtener_parser("java").parse(fuente.encode("utf-8"))
         if arbol.root_node.has_error:
@@ -520,6 +574,19 @@ class JavaAdapter(AdaptadorEnDesarrollo):
         )
         return encontrados
 
+    def motivo_funcion_no_soportada(self, funcion: dict[str, Any]) -> str | None:
+        """Varargs: el validador de pruebas Java necesita parámetros fijos.
+
+        Se dice antes de planificar para no gastar tokens en un método cuya prueba
+        el guardrail rechazaría siempre.
+        """
+        if any(
+            str(p.get("tipo") or "").endswith("...")
+            for p in funcion.get("parametros", [])
+        ):
+            return MOTIVO_VARARGS
+        return None
+
     def motivo_endpoint_no_planificable(self, endpoint: dict[str, Any]) -> str | None:
         """Omite endpoints Spring sin estado o validación declarativa verificable."""
         from qagent.lenguajes.java_spring_planificacion import motivo_no_planificable
@@ -634,7 +701,7 @@ class JavaAdapter(AdaptadorEnDesarrollo):
                     raise ValueError(
                         "; ".join(extraer_errores_sintaxis(arbol.root_node))
                     )
-                clases, funciones = _declaraciones(arbol.root_node)
+                clases, funciones, sobrecargas = _declaraciones_java(arbol.root_node)
             except (OSError, UnicodeError, ValueError, RecursionError) as error:
                 errores.append(
                     {
@@ -660,6 +727,12 @@ class JavaAdapter(AdaptadorEnDesarrollo):
                     "funciones_excluidas": [
                         f for f in funciones if f.get("dependencias_inyectadas")
                     ],
+                    # Sobrecargas: quedan fuera con su motivo, sin perder el resto.
+                    **(
+                        {"metodos_no_seleccionables": sobrecargas}
+                        if sobrecargas
+                        else {}
+                    ),
                 }
             )
             arboles[relativa] = arbol.root_node

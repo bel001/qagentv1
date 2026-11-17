@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from qagent.lenguajes.base import Clasificacion, NoImplementado
+from qagent.lenguajes.java_identidad import base_de, es_sobrecarga, metodo_de
 from qagent.lenguajes.treesitter import obtener_parser
 from qagent.llm.fake import MARCA_CONTRATO
 
@@ -89,7 +90,7 @@ def contexto_java(
         ),
         "",
     )
-    archivo = archivo_java(objetivo_metodo, paquete)
+    archivo = archivo_java(base_de(objetivo_metodo), paquete)
     # También valida nombres reservados del anfitrión antes de pedir código al LLM.
     ruta_de_prueba(ruta_proyecto, archivo)
     constructores = [
@@ -104,7 +105,8 @@ def contexto_java(
     contexto = {
         "paquete": paquete,
         "clase": funcion["clase"],
-        "metodo": objetivo_metodo.rsplit(".", 1)[-1],
+        "metodo": metodo_de(objetivo_metodo),
+        "sobrecargado": es_sobrecarga(objetivo_metodo),
         "archivo": archivo,
         "clase_test": PurePosixPath(archivo).stem,
         "es_static": funcion["es_static"],
@@ -184,6 +186,13 @@ def prompt_java(
         "- Para arrays usa assertArrayEquals con un array literal; para List usa assertEquals con List.of. "
         "En enteros no uses literales de punto flotante ni delta. Para float/double, una delta literal "
         "no negativa y como máximo 1e-6 * max(1, abs(esperado)); no la aumentes en reparaciones.\n"
+        "- Si el método devuelve String, compara el resultado directamente con un literal String. "
+        "Si devuelve CharSequence, StringBuilder o StringBuffer, compara su contenido con "
+        'assertEquals("esperado", llamada.toString()). Es la única transformación admitida: no '
+        "apliques trim, toLowerCase, String.valueOf ni ninguna otra operación al resultado.\n"
+        "- Si el contexto dice sobrecargado: true, hay varias versiones del método. Escribe cada "
+        "argumento con el literal exacto del tipo de esta firma (1 para int, 1L para long, 1.0 "
+        "para double, 1.0f para float) para que Java llame a esta versión.\n"
         "- Mockito se permite únicamente para objetos de dependencia que recibe el constructor. "
         "No hagas mock/spy de la clase probada ni del resultado esperado; no uses mockStatic, "
         "mockConstruction ni stubs del método que estamos comprobando. No simules llama_a indiscriminadamente. "

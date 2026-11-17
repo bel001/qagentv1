@@ -6,6 +6,7 @@ consultar IA. La compilación y la ejecución real corresponden al sandbox #182.
 
 from __future__ import annotations
 
+import json
 import re
 from decimal import Decimal
 from typing import Any
@@ -22,7 +23,20 @@ from qagent.lenguajes.java_aserciones import (
     resolver,
     texto,
 )
+from qagent.lenguajes.java_identidad import (
+    base_de,
+    es_sobrecarga,
+    literal_del_tipo,
+    literal_esperado,
+)
 from qagent.lenguajes.treesitter import obtener_parser
+
+#: Tipos de texto sin `equals` por contenido contra un String: su resultado se compara
+#: con `assertEquals("esperado", <llamada>.toString())`.
+TIPOS_TEXTO = frozenset({"CharSequence", "StringBuilder", "StringBuffer"})
+_ENTEROS = frozenset(
+    {"byte", "short", "int", "long", "Byte", "Short", "Integer", "Long"}
+)
 
 
 def validar_java(
@@ -50,7 +64,8 @@ def _validar(contrato, analisis, contexto):
         return "el test no contiene aserciones JUnit verificables."
     if any(n.type == "field_declaration" for n in nodos(analisis.raiz)):
         return "usa variables locales estables; los campos de la prueba no son oráculos demostrables."
-    clase, metodo = contrato["objetivo"].rsplit(".", 1)
+    clase, metodo = base_de(contrato["objetivo"]).rsplit(".", 1)
+    sobrecarga = es_sobrecarga(contrato["objetivo"])
     clase_test = "_".join(clase.split(".")) + "Test"
     clases = [n for n in analisis.raiz.named_children if n.type == "class_declaration"]
     if len(clases) != 1 or texto(clases[0].child_by_field_name("name")) != clase_test:
@@ -65,6 +80,7 @@ def _validar(contrato, analisis, contexto):
     if len(analisis.aserciones) != len(contrato["casos"]):
         return "debe haber una aserción del contrato por caso, sin aserciones ajenas o tautologías."
     parametros, es_static, retorno = _firma(contrato["firma"])
+    tipos = _tipos_de_firma(contrato["firma"])
     disponibles = list(analisis.aserciones)
     usados: set[int] = set()
     for caso in contrato["casos"]:
@@ -78,6 +94,7 @@ def _validar(contrato, analisis, contexto):
             retorno,
             contexto,
             usados,
+            tipos if sobrecarga else None,
         )
         if problema:
             return problema
@@ -113,8 +130,13 @@ def _validar_caso(
     retorno: str,
     contexto,
     usados: set[int],
+    tipos_sobrecarga: list[str] | None = None,
 ) -> str | None:
-    """Busca y consume la aserción que demuestra un caso del contrato."""
+    """Busca y consume la aserción que demuestra un caso del contrato.
+
+    Con ``tipos_sobrecarga`` (el método está sobrecargado) cada argumento debe ser el
+    literal exacto de su tipo, para que Java llame a esta versión y no a otra.
+    """
     entrada = caso.get("entrada")
     if isinstance(entrada, dict):
         if set(entrada) != set(parametros):
@@ -126,6 +148,7 @@ def _validar_caso(
         esperados = []
     else:
         return f"las entradas del caso {caso['id']} no son verificables."
+    pistas: list[tuple[int, str]] = []
     encontrada, problema = _buscar_asercion(
         disponibles,
         esperados,
@@ -136,13 +159,22 @@ def _validar_caso(
         caso,
         contexto,
         usados,
+        pistas,
+        tipos_sobrecarga,
     )
     if problema:
         return problema
     if encontrada is None:
+        # La pista de la aserción que más cerca estuvo: así el siguiente intento
+        # sabe qué argumento, llamada, tipo o aserción corregir.
+        detalle = (
+            max(pistas, key=lambda pista: pista[0])[1]
+            if pistas
+            else _pista_sin_llamada(disponibles, metodo, clase, retorno)
+        )
         return (
             f"el caso '{caso['id']}' no comprueba sus entradas y valor esperado o "
-            "excepción sobre el método real."
+            f"excepción sobre el método real. Corrige esto: {detalle}"
         )
     disponibles.pop(encontrada)
     return None
@@ -158,14 +190,30 @@ def _buscar_asercion(
     caso,
     contexto,
     usados: set[int],
+    pistas: list[tuple[int, str]] | None = None,
+    tipos_sobrecarga: list[str] | None = None,
 ) -> tuple[int | None, str | None]:
-    """Devuelve el índice de la aserción del caso y el problema de constructor, si hay."""
+    """Devuelve el índice de la aserción del caso y el problema de constructor, si hay.
+
+    En `pistas` deja, por cada aserción que llama al método pero no demuestra el
+    caso, hasta dónde llegó (1 receptor, 2 argumentos, 3 comprobación) y qué falló.
+    """
+    pistas = pistas if pistas is not None else []
     for indice, asercion in enumerate(disponibles):
         llamada = _llamada(asercion)
         if llamada is None or texto(llamada.child_by_field_name("name")) != metodo:
             continue
         receptor = llamada.child_by_field_name("object")
         if receptor is None:
+            pistas.append(
+                (
+                    1,
+                    (
+                        f"la aserción de la línea {asercion.linea} llama a {metodo}(...) "
+                        f"sin receptor; usa {_forma_receptor(clase, metodo, es_static)}."
+                    ),
+                )
+            )
             continue
         nombres = {clase}
         if contexto is not None and contexto["paquete"]:
@@ -175,6 +223,16 @@ def _buscar_asercion(
                 texto(receptor) not in nombres
                 or texto(receptor).split(".")[0] in asercion.alias
             ):
+                pistas.append(
+                    (
+                        1,
+                        (
+                            f"la aserción de la línea {asercion.linea} llama a {metodo} "
+                            f"sobre `{texto(receptor)}`; el método es static: usa "
+                            f"{_forma_receptor(clase, metodo, es_static)}."
+                        ),
+                    )
+                )
                 continue
         else:
             receptor = resolver(receptor, asercion.alias)
@@ -182,6 +240,16 @@ def _buscar_asercion(
                 receptor.type != "object_creation_expression"
                 or texto(receptor.child_by_field_name("type")) not in nombres
             ):
+                pistas.append(
+                    (
+                        1,
+                        (
+                            f"la aserción de la línea {asercion.linea} no llama a {metodo} "
+                            f"sobre un objeto construido en la prueba; usa "
+                            f"{_forma_receptor(clase, metodo, es_static)}."
+                        ),
+                    )
+                )
                 continue
             if contexto is not None:
                 problema, mocks = _constructor(receptor, asercion.alias, contexto)
@@ -193,11 +261,223 @@ def _buscar_asercion(
             _igual(literal(a, asercion.alias), e)
             for a, e in zip(args, esperados, strict=False)
         ):
+            pistas.append((2, _pista_argumentos(asercion, args, esperados, caso)))
             continue
+        if tipos_sobrecarga is not None:
+            pista = _pista_literales(asercion, args, tipos_sobrecarga, metodo)
+            if pista is not None:
+                pistas.append((2, pista))
+                continue
         if not _comprueba(asercion, caso, retorno):
+            pistas.append((3, _pista_comprobacion(asercion, caso, retorno)))
             continue
         return indice, None
     return None, None
+
+
+def _tipos_de_firma(firma: str) -> list[str]:
+    """Tipos de los parámetros de la firma del contrato, en orden."""
+    raiz = (
+        obtener_parser("java")
+        .parse(("class Contexto { " + firma + " {} }").encode("utf-8"))
+        .root_node
+    )
+    metodo = next((n for n in nodos(raiz) if n.type == "method_declaration"), None)
+    if metodo is None:
+        return []
+    parametros = metodo.child_by_field_name("parameters")
+    return [
+        texto(p.child_by_field_name("type"))
+        for p in (parametros.named_children if parametros is not None else [])
+        if p.child_by_field_name("type") is not None
+    ]
+
+
+def _pista_literales(
+    asercion: AsercionJava, args: list[Node], tipos: list[str], metodo: str
+) -> str | None:
+    """En una sobrecarga, el argumento cuyo literal no es del tipo de esa versión."""
+    for posicion, (argumento, tipo) in enumerate(zip(args, tipos, strict=False), 1):
+        nodo = resolver(argumento, asercion.alias)
+        if nodo.type == "unary_expression":
+            nodo = nodo.child_by_field_name("operand") or nodo
+        if literal_del_tipo(nodo.type, texto(nodo), tipo):
+            continue
+        forma = literal_esperado(tipo) or f"un literal de tipo {tipo}"
+        return (
+            f"{metodo} está sobrecargado: en la llamada de la línea {asercion.linea} "
+            f"el argumento {posicion} (`{texto(argumento)}`) debe ser {forma} para que "
+            f"Java llame a la versión con {tipo} y no a otra."
+        )
+    return None
+
+
+def _forma_receptor(clase: str, metodo: str, es_static: bool) -> str:
+    """Cómo debe escribirse la llamada al método real."""
+    if es_static:
+        return f"{clase}.{metodo}(...)"
+    return f"new {clase}(...).{metodo}(...) (o una variable local con ese objeto)"
+
+
+def _json(valor: Any) -> str:
+    return json.dumps(valor, ensure_ascii=False)
+
+
+def _pista_sin_llamada(
+    disponibles: list[AsercionJava], metodo: str, clase: str, retorno: str
+) -> str:
+    """Ninguna aserción llama al método de forma directa: dice cuál lo envuelve."""
+    simple = _tipo_simple(retorno)
+    for asercion in disponibles:
+        if asercion.tipo in {"excepcion", "excepcion_exacta"}:
+            continue
+        actual = resolver(asercion.actual, asercion.alias)
+        anidada = next(
+            (
+                n
+                for n in nodos(actual)
+                if n.type == "method_invocation"
+                and texto(n.child_by_field_name("name")) == metodo
+            ),
+            None,
+        )
+        if anidada is None:
+            continue
+        admitido = (
+            " Para comparar el texto solo se admite `.toString()` sobre la llamada."
+            if simple in TIPOS_TEXTO
+            else ""
+        )
+        return (
+            f"la aserción de la línea {asercion.linea} compara `{texto(actual)}`: la "
+            f"llamada a {metodo} está dentro de otra operación. Compara directamente "
+            f"el resultado de {clase}.{metodo}(...), sin transformarlo.{admitido}"
+        )
+    return (
+        f"ninguna aserción llama a {clase}.{metodo}(...) con las entradas del caso; "
+        "la llamada al método real debe ser el valor obtenido de la aserción."
+    )
+
+
+def _pista_argumentos(
+    asercion: AsercionJava, args: list[Node], esperados: list, caso: dict[str, Any]
+) -> str:
+    """Qué argumento de la llamada no coincide con la entrada del caso."""
+    lugar = f"la llamada de la línea {asercion.linea}"
+    if len(args) != len(esperados):
+        return (
+            f"{lugar} pasa {len(args)} argumento(s) y el caso '{caso['id']}' define "
+            f"{len(esperados)}: {_json(esperados)}."
+        )
+    for posicion, (argumento, esperado) in enumerate(
+        zip(args, esperados, strict=False), start=1
+    ):
+        if not _igual(literal(argumento, asercion.alias), esperado):
+            return (
+                f"en {lugar} el argumento {posicion} es `{texto(argumento)}` y el caso "
+                f"'{caso['id']}' pide {_json(esperado)}; escríbelo como literal con "
+                "ese valor exacto."
+            )
+    return f"{lugar} no usa las entradas del caso '{caso['id']}': {_json(esperados)}."
+
+
+def _pista_comprobacion(
+    asercion: AsercionJava, caso: dict[str, Any], retorno: str
+) -> str:
+    """Por qué la aserción llama bien al método pero no demuestra el caso."""
+    lugar = f"la aserción de la línea {asercion.linea}"
+    if not _argumentos_asercion_validos(asercion):
+        return (
+            f"{lugar} lleva argumentos de más: solo se admite un mensaje literal (y "
+            "una delta literal en float/double)."
+        )
+    if "excepcion" in caso:
+        excepcion = caso["excepcion"]
+        if asercion.tipo != "excepcion" or asercion.valor is None:
+            return (
+                f"el caso '{caso['id']}' espera la excepción {excepcion}: usa "
+                f"assertThrows({excepcion}.class, () -> <llamada>)."
+            )
+        return (
+            f"{lugar} espera `{texto(asercion.valor)}` y el contrato pide "
+            f"{excepcion}.class."
+        )
+    if "valor_esperado" not in caso:
+        return f"el caso '{caso['id']}' no define un valor esperado verificable."
+    esperado = caso["valor_esperado"]
+    if not _tipo_comparacion(asercion, esperado, retorno):
+        return f"{lugar}: {_pista_tipo(asercion, esperado, retorno)}"
+    if asercion.tipo in {"igualdad", "array"}:
+        if not _igual(literal(asercion.valor, asercion.alias), esperado):
+            return (
+                f"{lugar} compara con `{texto(asercion.valor)}` y el contrato pide "
+                f"{_json(esperado)}; no cambies el valor esperado."
+            )
+        return (
+            f"{lugar}: la delta debe ser un literal entre 0 y "
+            "1e-6 * max(1, |esperado|), y solo se admite en float/double."
+        )
+    if isinstance(esperado, bool):
+        forma = "assertTrue" if esperado else "assertFalse"
+        return (
+            f"el caso '{caso['id']}' espera {_json(esperado)}: usa {forma}(<llamada>)."
+        )
+    if esperado is None:
+        return f"el caso '{caso['id']}' espera null: usa assertNull(<llamada>)."
+    return (
+        f"el caso '{caso['id']}' espera {_json(esperado)}: usa "
+        "assertEquals(<esperado>, <llamada>)."
+    )
+
+
+def _pista_tipo(asercion: AsercionJava, esperado: Any, retorno: str) -> str:
+    """La forma de comparar que corresponde al tipo de retorno del método."""
+    simple = _tipo_simple(retorno)
+    if _usa_to_string(asercion) and not (
+        isinstance(esperado, str) and simple in TIPOS_TEXTO
+    ):
+        return (
+            f"quita `.toString()`: el método devuelve {simple} y su resultado se "
+            "compara directamente."
+        )
+    if isinstance(esperado, list):
+        if retorno.endswith("[]"):
+            return (
+                "el método devuelve un array: usa assertArrayEquals con un array "
+                "literal (new T[] {...}) como esperado."
+            )
+        return (
+            "el método devuelve una lista: usa assertEquals(List.of(...), <llamada>)."
+        )
+    if asercion.tipo == "array":
+        return f"el método devuelve {simple}, no un array: usa assertEquals."
+    if isinstance(esperado, str):
+        if simple in {"char", "Character"}:
+            return "el método devuelve char: el esperado es un literal de carácter ('a'), no un String."
+        if simple == "String":
+            return 'el esperado debe ser un literal String entre comillas ("...").'
+        if simple in TIPOS_TEXTO:
+            return (
+                f"el método devuelve {simple}, que no se compara con equals contra un "
+                f"String: compara su contenido con assertEquals({_json(esperado)}, "
+                "<llamada>.toString())."
+            )
+        return (
+            f"el contrato espera el texto {_json(esperado)}, pero el método devuelve "
+            f"{simple}: este guardrail no puede demostrar esa comparación."
+        )
+    if isinstance(esperado, bool):
+        return f"el contrato espera un booleano y el método devuelve {simple}."
+    if isinstance(esperado, (int, float)):
+        if simple in _ENTEROS:
+            return (
+                f"el método devuelve {simple}: el esperado es un literal entero, sin "
+                "decimales ni delta."
+            )
+        return f"el contrato espera un número y el método devuelve {simple}."
+    if esperado is None:
+        return f"el método devuelve {simple}, que no puede ser null."
+    return f"la aserción no corresponde al tipo de retorno {retorno}."
 
 
 def _instrucciones(analisis, mocks: set[int]) -> str | None:
@@ -328,7 +608,34 @@ def _llamada(asercion: AsercionJava) -> Node | None:
             ):
                 return None
             actual = hijos[0].named_children[0]
+    elif _es_to_string(actual):
+        # `<llamada>.toString()`: la única transformación que se reconoce, y solo se
+        # acepta si el método devuelve un tipo de texto (ver `_tipo_comparacion`).
+        actual = resolver(actual.child_by_field_name("object"), asercion.alias)
     return actual if actual is not None and actual.type == "method_invocation" else None
+
+
+def _es_to_string(nodo: Node | None) -> bool:
+    """`x.toString()` sin argumentos."""
+    return (
+        nodo is not None
+        and nodo.type == "method_invocation"
+        and texto(nodo.child_by_field_name("name")) == "toString"
+        and nodo.child_by_field_name("object") is not None
+        and not argumentos(nodo)
+    )
+
+
+def _usa_to_string(asercion: AsercionJava) -> bool:
+    """Si la aserción compara `<llamada>.toString()` en vez del resultado directo."""
+    return asercion.tipo not in {"excepcion", "excepcion_exacta"} and _es_to_string(
+        resolver(asercion.actual, asercion.alias)
+    )
+
+
+def _tipo_simple(retorno: str) -> str:
+    """`java.util.List<String>` -> `List`."""
+    return re.sub(r"<.*>", "", retorno).rsplit(".", 1)[-1]
 
 
 def _comprueba(asercion: AsercionJava, caso: dict[str, Any], retorno: str) -> bool:
@@ -371,7 +678,13 @@ def _tipo_comparacion(asercion: AsercionJava, esperado: Any, retorno: str) -> bo
     valor = (
         resolver(asercion.valor, asercion.alias) if asercion.valor is not None else None
     )
-    simple = re.sub(r"<.*>", "", retorno).rsplit(".", 1)[-1]
+    simple = _tipo_simple(retorno)
+    con_texto = _usa_to_string(asercion)
+    if con_texto != (isinstance(esperado, str) and simple in TIPOS_TEXTO):
+        # CharSequence, StringBuilder y StringBuffer no definen equals por contenido:
+        # se comparan con `.toString()`. En cualquier otro retorno, `.toString()`
+        # cambiaría lo que se comprueba y no se admite.
+        return False
     if isinstance(esperado, list):
         if retorno.endswith("[]"):
             return (
@@ -392,14 +705,13 @@ def _tipo_comparacion(asercion: AsercionJava, esperado: Any, retorno: str) -> bo
             valor.type == "character_literal"
             if simple in {"char", "Character"}
             else valor.type == "string_literal"
-            if simple == "String"
+            if simple == "String" or simple in TIPOS_TEXTO
             else False
         )
     if (
         isinstance(esperado, (int, float))
         and not isinstance(esperado, bool)
-        and simple
-        in {"byte", "short", "int", "long", "Byte", "Short", "Integer", "Long"}
+        and simple in _ENTEROS
     ):
         if valor is None:
             return False

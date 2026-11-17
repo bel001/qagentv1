@@ -471,6 +471,16 @@ def construir_html_informe(
         for k, v in _filas_entorno(datos)
         if k != "Comando" or opts["trazas"]
     )
+    from qagent.storage.informe_contexto import lineas_contexto
+
+    contexto = lineas_contexto(datos)
+    contexto_html = (
+        "<section><h2>Contexto recuperado automáticamente</h2><ul>"
+        + "".join(f"<li>{esc(linea)}</li>" for linea in contexto)
+        + "</ul></section>"
+        if contexto
+        else ""
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="es">
@@ -529,6 +539,7 @@ def construir_html_informe(
   </div>
   <div id="t1" class="panel active">
     <h2>1. Metas de calidad y Por dónde empezar</h2>
+    {contexto_html}
     {prioridades_html}
     {salud_html}
     <table><thead><tr><th>Métrica</th><th>Resultado</th><th>Meta</th><th>Estado</th></tr></thead>

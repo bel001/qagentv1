@@ -75,20 +75,45 @@ MOTIVO_OMITIDA_TRIVIAL = (
 )
 
 
+def _objetivo_del_prompt(funcion: dict[str, Any]) -> dict[str, Any]:
+    """Lo que el Planner ve de una función; de un método, además cómo se construye."""
+    objetivo = {
+        "nombre": funcion["nombre"],
+        "firma": funcion.get("firma"),
+        "docstring": funcion.get("docstring"),
+    }
+    if funcion.get("tipo_metodo"):
+        objetivo["tipo_metodo"] = funcion["tipo_metodo"]
+        constructor = funcion.get("constructor")
+        if funcion["tipo_metodo"] == "instancia" and isinstance(constructor, dict):
+            objetivo["constructor"] = {
+                "firma": constructor.get("firma"),
+                "docstring": constructor.get("docstring"),
+            }
+    return objetivo
+
+
+def _reglas_metodos(objetivos: list[dict[str, Any]]) -> str:
+    """Reglas de los métodos (ADR-017), solo si el módulo tiene alguno: ahorra tokens."""
+    if not any(o.get("tipo_metodo") for o in objetivos):
+        return ""
+    return """- Los objetivos con "tipo_metodo" son métodos `Clase.metodo`. Su "firma" incluye
+  self o cls: no los pongas en "entrada".
+- Para tipo_metodo "instancia", cada caso lleva además "constructor": los argumentos
+  por nombre con que se construye la clase, deducidos SOLO de la firma y el docstring
+  del constructor que se te da (como "entrada"). Si el estado inicial que necesita el
+  caso no se deduce de ahí, omite ese caso.
+- Para "estatico" y "clase" no pongas "constructor".
+"""
+
+
 class _PromptsPython:
     """Prompts del Planner para Python (antes métodos de ``PlannerAgent``)."""
 
     @staticmethod
     def prompt_funciones_completo(modulo: dict[str, Any]) -> str:
         """Prompt compacto: solo firma y docstring de cada función (sin el código)."""
-        objetivos = [
-            {
-                "nombre": funcion["nombre"],
-                "firma": funcion.get("firma"),
-                "docstring": funcion.get("docstring"),
-            }
-            for funcion in modulo.get("funciones", [])
-        ]
+        objetivos = [_objetivo_del_prompt(f) for f in modulo.get("funciones", [])]
         ejemplo = json.dumps(_EJEMPLO_RESPUESTA, ensure_ascii=False)
         return f"""
 Diseña casos de prueba unitaria pytest para las funciones de un módulo Python.
@@ -118,7 +143,7 @@ REGLAS OBLIGATORIAS:
   agrega "tipo_valor_esperado": "tuple"; no uses esa metadata para listas.
 - Devuelve SOLO una lista JSON con un objeto por función:
   {{"objetivo": nombre, "casos": [...]}}. Sin explicaciones ni bloques Markdown.
-
+{_reglas_metodos(objetivos)}
 EJEMPLO DE RESPUESTA:
 {ejemplo}
 
@@ -129,14 +154,7 @@ EJEMPLO DE RESPUESTA:
     @staticmethod
     def prompt_funciones_humo(modulo: dict[str, Any]) -> str:
         """Humo (#75): un caso normal por función, con instrucciones mínimas."""
-        objetivos = [
-            {
-                "nombre": funcion["nombre"],
-                "firma": funcion.get("firma"),
-                "docstring": funcion.get("docstring"),
-            }
-            for funcion in modulo.get("funciones", [])
-        ]
+        objetivos = [_objetivo_del_prompt(f) for f in modulo.get("funciones", [])]
         ejemplo = json.dumps(
             [{**_EJEMPLO_RESPUESTA[0], "casos": _EJEMPLO_RESPUESTA[0]["casos"][:1]}],
             ensure_ascii=False,
@@ -156,7 +174,7 @@ Prueba de humo pytest: UN caso normal por función (entrada válida y su resulta
 - Devuelve SOLO una lista JSON con un objeto por función:
   [{{"objetivo": nombre, "casos": [caso]}}]. Si ninguna tiene un caso deducible,
   devuelve la lista vacía [].
-Ejemplo: {ejemplo}
+{_reglas_metodos(objetivos)}Ejemplo: {ejemplo}
 
 {MARCA_MODULO} {modulo["ruta"]}
 {MARCA_OBJETIVOS} {json.dumps(objetivos, ensure_ascii=False)}
@@ -380,6 +398,34 @@ def motivo_limite_funcion(funcion: dict[str, Any], caso: dict[str, Any]) -> str 
     return "caso límite sin una especificación que describa ese límite"
 
 
+def motivo_constructor(funcion: dict[str, Any], caso: dict[str, Any]) -> str | None:
+    """Si el ``constructor`` del caso no corresponde al objetivo (ADR-017); None si sí.
+
+    Un método de instancia necesita construir la clase con argumentos que liguen con
+    su constructor (todos los obligatorios, ninguno desconocido). Un estático, uno de
+    clase o una función no llevan constructor.
+    """
+    tiene = "constructor" in caso
+    if funcion.get("tipo_metodo") != "instancia":
+        return "solo un método de instancia lleva 'constructor'" if tiene else None
+    argumentos = caso.get("constructor")
+    if not isinstance(argumentos, dict):
+        return "un método de instancia necesita 'constructor' con los argumentos por nombre"
+    parametros = (funcion.get("constructor") or {}).get("parametros") or []
+    libres = any(p["nombre"].startswith("**") for p in parametros)
+    nombres = {p["nombre"] for p in parametros if not p["nombre"].startswith("*")}
+    obligatorios = {
+        p["nombre"]
+        for p in parametros
+        if not p["nombre"].startswith("*") and p.get("por_defecto") is None
+    }
+    if faltan := obligatorios - set(argumentos):
+        return f"al constructor le faltan argumentos obligatorios: {', '.join(sorted(faltan))}"
+    if not libres and (sobran := set(argumentos) - nombres):
+        return f"el constructor no recibe: {', '.join(sorted(sobran))}"
+    return None
+
+
 def motivo_oraculo_funcion(funcion: dict[str, Any], caso: dict[str, Any]) -> str | None:
     """Valida que la procedencia declarada pueda justificar el oráculo del caso.
 
@@ -389,6 +435,9 @@ def motivo_oraculo_funcion(funcion: dict[str, Any], caso: dict[str, Any]) -> str
     resultado, pero no permite adivinar un valor; una firma describe cómo invocar la
     función, pero no su comportamiento funcional.
     """
+    motivo = motivo_constructor(funcion, caso)
+    if motivo:
+        return motivo
     origen = caso.get("origen")
     if origen == "inferido":
         # ADR-016: solo en la fase de inferencia, y con evidencia que se entregó.
@@ -565,6 +614,8 @@ def _llamada_no_liga(funcion: dict[str, Any], entrada: Any) -> bool:
     if nodo is None:
         return False
     lista = arbol_ts.parametros(nodo.child_by_field_name("parameters"))
+    if funcion.get("tipo_metodo") in ("instancia", "clase") and lista:
+        lista = lista[1:]  # self o cls no van en la entrada (ADR-017)
     requeridos = {
         p.nombre
         for p in lista

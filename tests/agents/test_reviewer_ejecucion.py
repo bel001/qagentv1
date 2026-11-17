@@ -165,7 +165,10 @@ def test_el_reviewer_aplica_los_limites_de_config_al_sandbox_real(
         assert llamada["imagen"] == "img"
         assert "--junitxml=/out/junit.xml" in llamada["comando"]
         assert llamada["archivo_informe"] == "junit.xml"
-        assert llamada["variables"] == {"COVERAGE_FILE": "/out/.coverage"}
+        assert llamada["variables"] == {
+            "COVERAGE_FILE": "/out/.coverage",
+            "PYTHONPATH": "/work/proyecto:/work/proyecto/src",
+        }
 
 
 def test_el_informe_muestra_los_limites_que_de_verdad_se_aplicaron(

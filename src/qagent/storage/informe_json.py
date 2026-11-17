@@ -27,6 +27,8 @@ def construir_json_informe(
     """Construye el archivo `results_<run_id>.json` con las cifras de `results.json`."""
     opts = normalizar_opciones(opciones)
     base = copy.deepcopy(datos["results"])
+    if datos.get("contexto_automatico"):
+        base["contexto_automatico"] = copy.deepcopy(datos["contexto_automatico"])
 
     # Eliminar costos monetarios y precios de tokens de la salida JSON para personas
     if "resumen" in base and isinstance(base["resumen"], dict):

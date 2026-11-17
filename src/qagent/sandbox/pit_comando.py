@@ -6,6 +6,7 @@ import re
 from pathlib import Path, PurePosixPath
 
 from qagent.lenguajes.base import ComandoSandbox
+from qagent.lenguajes.java_identidad import es_sobrecarga
 from qagent.xml_seguro import parsear_xml
 
 IDENTIFICADOR = re.compile(r"[A-Za-z_$][A-Za-z0-9_$]*\Z")
@@ -53,6 +54,10 @@ def comando_pit(modulo: str, funciones: list[str]) -> ComandoSandbox:
         raise ValueError("No hay métodos críticos seleccionados; no se ejecutará PIT.")
     metodos: set[str] = set()
     for objetivo in funciones:
+        if es_sobrecarga(objetivo):
+            raise ValueError(
+                "PIT selecciona los métodos a mutar por nombre: no puede mutar una sola versión de un método sobrecargado sin mutar también las demás."
+            )
         segmentos = objetivo.split(".")
         if (
             len(segmentos) != 2

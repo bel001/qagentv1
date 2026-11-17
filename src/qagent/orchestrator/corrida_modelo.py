@@ -80,6 +80,7 @@ class ResumenCorrida:
     tipo_terminacion: str = "completada"
     objetivos_omitidos: int = 0
     imagen_docker: str | None = None
+    contexto_automatico: list[dict[str, Any]] = field(default_factory=list)
 
     def a_dict(self) -> dict[str, Any]:
         """Versión serializable a JSON (evento `corrida_fin` de la interfaz)."""
@@ -183,6 +184,9 @@ class _ModuloPreparado:
     plan_guardado: dict[str, Any] | None
     perfiles: dict[str, str]
     completos: dict[str, dict[str, Any]]
+    #: Objetivos cuyo contrato salió de la spec vigente cuando el resto se planificó
+    #: en esta corrida; vacío si se reutilizó o se planificó el módulo entero.
+    reutilizados: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

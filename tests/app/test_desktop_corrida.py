@@ -34,6 +34,21 @@ def _docker(estado: str):
     )
 
 
+def test_envia_contexto_automatico_solo_si_se_activa(api, monkeypatch, tmp_path):
+    (tmp_path / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+    (tmp_path / "a.ts").write_text(
+        "export function f(n: number): number { return n; }", encoding="utf-8"
+    )
+    monkeypatch.setenv("QAGENT_FAKE_LLM", "1")
+    monkeypatch.setattr(DesktopAPI, "_sandbox_listo", lambda self: True)
+    lanzadas = []
+    monkeypatch.setattr(api, "_lanzar_corrida", lambda *a, **kw: lanzadas.append(kw))
+    assert api.start_run(str(tmp_path), completar_contexto=True)["status"] == "started"
+    assert lanzadas == [{"completar_contexto": True}]
+    assert api.start_run(str(tmp_path), completar_contexto="si")["status"] == "blocked"
+    assert len(lanzadas) == 1
+
+
 def test_con_ia_real_lanza_el_pipeline(api, monkeypatch, corridas_lanzadas) -> None:
     monkeypatch.setenv("QAGENT_FAKE_LLM", "0")
     with _docker("ok"):

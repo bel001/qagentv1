@@ -403,6 +403,20 @@ class ProyectosMixin:
         ).start()
         return {**vista, "recomendacion_ia_pendiente": True}
 
+    def estado_preparacion(self, ruta: str) -> dict:
+        """Si el entorno aislado del proyecto ya está preparado (backlog 17).
+
+        La interfaz lo pide aparte, después de mostrar la Vista previa: consulta
+        Docker y no debe retrasarla. Nunca construye ni descarga nada.
+        """
+        from qagent.proyectos.compatibilidad import estado_preparacion
+
+        try:
+            return estado_preparacion(ruta)
+        except Exception as exc:  # noqa: BLE001 — informar nunca debe romper la vista
+            bitacora.registro.warning("No se consultó la preparación: %s", exc)
+            return {"estado": "desconocida", "mensaje": str(exc)}
+
     def analizar_proyecto(self, ruta: str) -> dict:
         """Alias de obtener_vista_previa para la interfaz JavaScript (HU-04)."""
         return self.obtener_vista_previa(ruta)

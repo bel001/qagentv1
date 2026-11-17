@@ -12,6 +12,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from qagent.lenguajes.java_identidad import separar, tipos_de_descriptor
 from qagent.xml_seguro import parsear_xml
 
 LIMITE_XML_JACOCO = 5_000_000
@@ -256,7 +257,9 @@ def cobertura_de_metodo(
     None. Un método sin ramas conserva ramas=None; no se fabrica un 100 %.
     """
     datos = ((cobertura or {}).get("files") or {}).get(modulo.replace("\\", "/"), {})
-    metodo = datos.get("functions", {}).get(objetivo)
+    metodo = datos.get("functions", {}).get(objetivo) or _sobrecarga_de(
+        datos.get("functions", {}), objetivo
+    )
     resumen = (metodo or {}).get("summary")
     if resumen is None or resumen["percent_covered"] is None:
         return None
@@ -264,6 +267,31 @@ def cobertura_de_metodo(
         "lineas": resumen["percent_covered"],
         "ramas": resumen["percent_branches_covered"],
     }
+
+
+def _sobrecarga_de(funciones: dict[str, Any], objetivo: str) -> dict[str, Any] | None:
+    """La entrada JaCoCo ``Clase.metodo<descriptor>`` de ``Clase.metodo(T1,T2)``.
+
+    Compara los tipos de la identidad con los del descriptor JVM. Un parámetro
+    genérico (``T``) aparece en el descriptor como su cota (``Object``): si no hay
+    coincidencia exacta, se acepta la única versión con el mismo número de
+    parámetros. Si hay dudas, None: nunca se atribuyen líneas de otra versión.
+    """
+    base, tipos = separar(objetivo)
+    if tipos is None:
+        return None
+    candidatos = []
+    for clave, metodo in funciones.items():
+        if not clave.startswith(base + "("):
+            continue
+        del_descriptor = tipos_de_descriptor(clave[len(base) :])
+        if del_descriptor is not None:
+            candidatos.append((del_descriptor, metodo))
+    exactos = [m for t, m in candidatos if t == tipos]
+    if len(exactos) == 1:
+        return exactos[0]
+    misma_aridad = [m for t, m in candidatos if len(t) == len(tipos)]
+    return misma_aridad[0] if not exactos and len(misma_aridad) == 1 else None
 
 
 def _entero(texto: str | None, positivo: bool = False) -> int:

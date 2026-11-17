@@ -13,6 +13,7 @@ from qagent.lenguajes import (
     LenguajeNoSoportado,
     VersionPythonNoSoportada,
     adaptador_del_proyecto,
+    aviso_recorrido_incompleto,
     fuera_de_la_corrida,
 )
 from qagent.llm import TokenTracker
@@ -92,6 +93,7 @@ def _analizar_entrada(
     progreso: dict[str, int],
     avisar: Callable[..., None],
     avisar_entorno: Callable[..., None],
+    completar_contexto: bool = False,
 ) -> _EntradaCorrida | None:
     """Elige el adaptador y los módulos; None si la corrida ya se detuvo."""
     from qagent.proyectos.seleccion import filtrar_modulos
@@ -127,6 +129,21 @@ def _analizar_entrada(
     modulos = [
         _con_fuente(ruta, m) for m in filtrar_modulos(analisis["modulos"], seleccion)
     ]
+    if completar_contexto:
+        modulos = adaptador.completar_contexto(ruta, modulos)
+        resumen.contexto_automatico = [
+            {
+                "modulo": m["ruta"],
+                "objetivo": f["nombre"],
+                "contexto": f["contexto_recuperado"],
+            }
+            for m in modulos
+            for f in m.get("funciones", [])
+            if f.get("contexto_recuperado")
+        ]
+        avisar(
+            "Contexto automático: lectura de documentación local completada (0 tokens)."
+        )
     n_funciones, n_integraciones, n_endpoints, n_componentes = _cifras_de_modulos(
         modulos
     )
@@ -142,17 +159,23 @@ def _analizar_entrada(
     fuera = fuera_de_la_corrida(ruta, adaptador)
     for aviso in fuera:
         avisar(aviso["mensaje"], "aviso")
+    if incompleto := aviso_recorrido_incompleto(ruta):
+        avisar(incompleto, "aviso")
     tipos = list(tipos)
+    # ADR-017: los métodos de clases van con las funciones, pero se nombran aparte.
+    n_metodos = sum(1 for m in modulos for f in m["funciones"] if f.get("tipo_metodo"))
+    n_sueltas = n_funciones - n_metodos
+    texto_metodos = f", y {n_metodos} método(s) de clases" if n_metodos else ""
     if n_endpoints:
         tipos = ["funcion", "endpoint"] if n_funciones else ["endpoint"]
         avisar(
-            f"Análisis estático: {len(modulos)} módulo(s) con {n_funciones} "
-            f"función(es) pública(s) y {n_endpoints} endpoint(s)"
+            f"Análisis estático: {len(modulos)} módulo(s) con {n_sueltas} "
+            f"función(es) pública(s) y {n_endpoints} endpoint(s){texto_metodos}"
         )
     else:
         avisar(
             f"Análisis estático: {len(modulos)} módulo(s) con "
-            f"{n_funciones} función(es) pública(s)"
+            f"{n_sueltas} función(es) pública(s){texto_metodos}"
         )
     if n_integraciones:
         tipos = [*tipos, "integracion"]
@@ -437,9 +460,15 @@ def _preparar_modulo(
     completos: dict[str, dict[str, Any]] = {}
     faltan: set[str] = set()
     de_humo: set[str] = set()
+    reutilizados: frozenset[str] = frozenset()
     if plan_guardado is not None:
         objetivos = _objetivos_de(modulo)
         elegidos = [c for c in plan_guardado["contratos"] if c["objetivo"] in objetivos]
+        adaptador = getattr(orquestador.planner, "adaptador", None)
+        if adaptador is not None:
+            elegidos = [
+                c for c in elegidos if adaptador.contexto_spec_vigente(c, modulo)
+            ]
         # #138: una spec anterior puede traer casos triviales de TypeError; sin
         # ellos, la que queda vacía se vuelve a planificar.
         elegidos = [h for h in map(contrato_sin_triviales, elegidos) if h]
@@ -463,6 +492,19 @@ def _preparar_modulo(
             archivo=modulo["ruta"],
         )
         plan = orquestador.planificar(modulo, plan_reutilizado=elegidos)
+    elif plan_guardado is not None and elegidos:
+        # La spec sirve para parte de lo elegido: el Planner solo planifica lo que
+        # falta, en vez de volver a pagar el módulo entero.
+        accion = "regenerado"
+        reutilizados = frozenset(c["objetivo"] for c in elegidos)
+        avisar(
+            f"Spec vigente para {len(elegidos)} objetivo(s): solo se planifican "
+            f"los {len(faltan)} que faltan",
+            archivo=modulo["ruta"],
+        )
+        plan = orquestador.planificar(
+            modulo, plan_reutilizado=elegidos, faltantes=faltan
+        )
     else:
         accion = "regenerado" if habia_spec else "generado"
         if de_humo:
@@ -483,4 +525,6 @@ def _preparar_modulo(
                 archivo=modulo["ruta"],
             )
         plan = orquestador.planificar(modulo)
-    return _ModuloPreparado(plan, accion, plan_guardado, perfiles, completos)
+    return _ModuloPreparado(
+        plan, accion, plan_guardado, perfiles, completos, reutilizados
+    )

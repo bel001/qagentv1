@@ -142,3 +142,73 @@ def test_al_volver_a_planificar_se_conservan_los_objetivos_no_elegidos(
         "formatear_moneda",
         "clasificar_edad",
     }
+
+
+def test_solo_se_envian_al_planner_los_objetivos_que_faltan(
+    almacen, config, monkeypatch
+) -> None:
+    """La spec vigente cubre parte de lo elegido: no se vuelve a pagar el módulo."""
+    from qagent.llm.fake import FakeLLMClient
+
+    correr(almacen, config, ["es_palindromo", "formatear_moneda"])
+    prompts: list[str] = []
+    original = FakeLLMClient.generar
+
+    def generar(self, prompt, rol="generator", **opciones):
+        if rol == "planner":
+            prompts.append(prompt)
+        return original(self, prompt, rol=rol, **opciones)
+
+    monkeypatch.setattr(FakeLLMClient, "generar", generar)
+
+    segunda = correr(almacen, config, ["es_palindromo", "clasificar_edad"])
+
+    assert len(prompts) == 1
+    assert '"clasificar_edad"' in prompts[0]
+    assert '"es_palindromo"' not in prompts[0]
+    assert sorted(probadas(almacen, segunda.run_id)) == [
+        "clasificar_edad",
+        "es_palindromo",
+    ]
+    assert objetivos_guardados(almacen) == {
+        "es_palindromo",
+        "formatear_moneda",
+        "clasificar_edad",
+    }
+
+
+def test_planificar_lo_que_falta_conserva_el_perfil_de_lo_reutilizado(
+    almacen, config
+) -> None:
+    """Lo reutilizado sigue siendo de Estándar aunque lo nuevo se planifique en Humo."""
+    correr(almacen, config, ["es_palindromo"])
+    [antes] = [
+        c
+        for c in almacen.listar_planes_modulo()[0]["contratos"]
+        if c["objetivo"] == "es_palindromo"
+    ]
+    run_id = almacen.crear_run(tipos_prueba=["funcion"])["run_id"]
+    ejecutar_corrida(
+        almacen.raiz,
+        "humo",
+        config,
+        None,
+        simulado=True,
+        run_id=run_id,
+        preparar_imagen=lambda _ruta: "imagen-prueba",
+        ejecutor=ejecutor_exitoso,
+        seleccion=[
+            {
+                "ruta": "banco_mvp.py",
+                "funciones": ["es_palindromo", "clasificar_edad"],
+                "endpoints": [],
+            }
+        ],
+    )
+
+    [plan] = almacen.listar_planes_modulo()
+    por_objetivo = {c["objetivo"]: c for c in plan["contratos"]}
+    assert por_objetivo["es_palindromo"]["casos"] == antes["casos"]
+    assert plan["perfiles"]["es_palindromo"] == "std"
+    assert plan["perfiles"]["clasificar_edad"] == "humo"
+    assert len(por_objetivo["clasificar_edad"]["casos"]) == 1

@@ -353,6 +353,9 @@ def datos_informe(
         funciones_enriquecidas.append(copia)
 
     datos = {
+        "contexto_automatico": copy.deepcopy(
+            (detalle or {}).get("contexto_automatico", [])
+        ),
         "run_id": run_actual,
         "fecha": results["fecha"],
         "proyecto": results["proyecto"],

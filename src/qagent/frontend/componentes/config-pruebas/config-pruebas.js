@@ -404,6 +404,9 @@ function renderTiposPrueba(){
       : '');
   const revisar = eleccionPruebas.unitarias === true || eleccionPruebas.integracion === true
     ? mods.flatMap(m=>m.fns).filter(f=>f.inc && f.orientacion && f.orientacion.categoria === 'revisar') : [];
+  if (typeof contextoAutomaticoDisponible === 'function' && contextoAutomaticoDisponible() && eleccionPruebas.modo !== 'repetir') {
+    $('prepTipos').innerHTML += `<label class="prep-casilla" data-caja="negra"><input type="checkbox" class="exp-caja" ${COMPLETAR_CONTEXTO ? 'checked' : ''} onchange="COMPLETAR_CONTEXTO=this.checked"><span><b>Completar contexto automáticamente</b><span class="prep-desc">Busca ejemplos documentados en el archivo, README y docs antes de generar las unitarias. Lectura local, 0 tokens. Las fuentes aparecen en el informe.</span></span></label>`;
+  }
   if (revisar.length && eleccionPruebas.modo !== 'repetir') {
     $('prepTipos').innerHTML += `<div class="np-aviso np-aviso-info" role="note"><div><b>${revisar.length} función(es) requieren revisión</b><p>El Planner puede consumir tokens aunque después las omita. La recomendación estática es gratuita; tú decides si las incluyes.</p><button type="button" class="ini-btn" onclick="go('preview')">Revisar mi selección</button></div></div>`;
   }

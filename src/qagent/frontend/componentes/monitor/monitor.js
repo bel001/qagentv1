@@ -270,13 +270,22 @@ function pushEvent(){
   registrarPaso({a:e.a, f:e.f, fn:e.fn, t:e.t, guard:e.guard, hechos:e.p, total:totalDemo()});
   if(evIdx>=EVENTS.length) finishRun();
 }
+let INICIO_MONITOR_PENDIENTE = false;
 async function startMonitor(){
+  if (INICIO_MONITOR_PENDIENTE) return;
+  INICIO_MONITOR_PENDIENTE = true;
+  try { return await iniciarMonitorSolicitado(); }
+  finally { INICIO_MONITOR_PENDIENTE = false; }
+}
+async function iniciarMonitorSolicitado(){
   if (!entornoListo) { toast(escHtml(entornoMotivo)); return; }
   if (window.pywebview && window.pywebview.api) {
-    if (!confirmarOrientacionAntesDeIA()) { go('preview'); return; }
+    if (!await confirmarOrientacionAntesDeIA()) { go('preview'); return; }
     // Python verifica Docker (HU-13) y el entorno completo (EN-06) antes de iniciar.
     // issue 275: inferir el contrato de las funciones sin docstring y, si se pidió, revisarlo antes de generar.
-    const r = await window.pywebview.api.start_run(projectPath, profile, obtenerSeleccionObjetivos(), INFERIR_SIN_DOCSTRING, INFERIR_SIN_DOCSTRING && REVISAR_INFERIDOS);
+    const opciones = [projectPath, profile, obtenerSeleccionObjetivos(), INFERIR_SIN_DOCSTRING, INFERIR_SIN_DOCSTRING && REVISAR_INFERIDOS];
+    if (typeof usarContextoAutomatico === 'function' && usarContextoAutomatico()) opciones.push(true);
+    const r = await window.pywebview.api.start_run(...opciones);
     if (r && r.status === 'docker_no_disponible') {
       toastError(escHtml(r.mensaje));
       actualizarSandbox();
@@ -313,6 +322,7 @@ function confirmarOrientacionAntesDeIA(){
     .flatMap(m=>m.fns || [])
     .filter(f=>f.inc && !f.noSoportada && f.orientacion && f.orientacion.categoria === 'revisar');
   if (!revisar.length) return true;
+  if (typeof abrirContextoAutomatico === 'function') return abrirContextoAutomatico(revisar);
   const nombres=revisar.slice(0,8).map(f=>`${f.n}: ${f.orientacion.motivo}`).join('\n');
   return window.confirm(`Elegiste ${revisar.length} función(es) que requieren revisión. El Planner puede consumir tokens aunque después las omita.\n\n${nombres}${revisar.length > 8 ? '\n…' : ''}\n\n¿Continuar con esta selección? Pulsa Cancelar para revisarla sin iniciar llamadas a la IA.`);
 }

@@ -192,6 +192,8 @@ function detalleDeReporte(f){
     ...ejecucionDeIntentos(intentos),
     // Evidencia de auditoría (antes en la pantalla del informe).
     controles: Array.isArray(f.controles) ? f.controles : [],
+    // Fase en la que se detuvo (planificación, generación, validación, ejecución, entorno o proyecto).
+    faseFallo: f.texto_fase_fallo || null,
     casos,
     categorias: f.texto_categorias || null,
     intentos,
@@ -529,7 +531,8 @@ function renderDetalleBandeja(e){
 /* Evidencia de auditoría: controles de integridad, casos del contrato, intentos y fortaleza de
    las pruebas. Plegada por defecto; solo aparecen los bloques que la corrida guardó. */
 const CONTROL_ESTADO = {ok:['exito', () => ICO_OK, 'En orden'], falla:['bug', () => ICO_ERROR, 'No cumple'],
-  no_aplica:['neutro', () => ICO_CIRCULO, 'No aplica'], pendiente:['neutro', () => ICO_CIRCULO, 'Pendiente'], sin_dato:['neutro', () => ICO_CIRCULO, 'Sin dato']};
+  no_aplica:['neutro', () => ICO_CIRCULO, 'No aplica'], pendiente:['neutro', () => ICO_CIRCULO, 'Pendiente'], sin_dato:['neutro', () => ICO_CIRCULO, 'Sin dato'],
+  no_ejecutado:['neutro', () => ICO_CIRCULO, 'No ejecutado']};
 const DECISION_TEXTO = {accept:'Aceptada', retry:'Se reintentó', bug_detectado:'Posible bug', stalled:'Sin prueba válida', requiere_corrida_nueva:'Requiere corrida nueva'};
 const RESULTADO_CASO = {paso:['exito', () => ICO_OK, 'Pasó'], fallo:['bug', () => ICO_ERROR, 'Falló'],
   error:['bug', () => ICO_ERROR, 'Error'], omitido:['neutro', () => ICO_CIRCULO, 'Omitido']};
@@ -551,6 +554,7 @@ function casoEjecutadoHtml(c){
 }
 function evidenciaAuditoria(e){
   const bloques = [];
+  if (e.faseFallo) bloques.push(`<div class="bnj-ev"><b>Dónde se detuvo</b><p class="np-meta">${escHtml(e.faseFallo)}</p></div>`);
   if (e.casosEjecutados && e.casosEjecutados.length) {
     const pasaron = e.casosEjecutados.filter(c => c.resultado === 'paso').length;
     bloques.push(`<div class="bnj-ev"><b>Casos ejecutados · ${pasaron} de ${e.casosEjecutados.length} pasaron</b><ul>${e.casosEjecutados.map(casoEjecutadoHtml).join('')}</ul></div>`);

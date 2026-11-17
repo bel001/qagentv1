@@ -167,6 +167,7 @@ def ejecutar_corrida(
     cancelado: Callable[[], bool] | None = None,
     inferir: bool | None = None,
     revisor_inferidos: Callable[[list[dict[str, Any]]], set[str]] | None = None,
+    completar_contexto: bool = False,
 ) -> ResumenCorrida:
     """Ejecuta la corrida completa de un proyecto y devuelve su resumen.
 
@@ -306,6 +307,7 @@ def ejecutar_corrida(
             progreso,
             avisar,
             avisar_entorno,
+            completar_contexto=completar_contexto,
         )
         if entrada is None:
             return resumen

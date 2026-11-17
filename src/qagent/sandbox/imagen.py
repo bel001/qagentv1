@@ -296,6 +296,19 @@ def _explicar_fallo_pip(archivos: Mapping[str, bytes], log: str) -> str:
     return "No se pudieron instalar las dependencias de Python (requirements.txt)."
 
 
+def _explicar_fallo_pip_de(
+    manifiesto: str,
+) -> Callable[[Mapping[str, bytes], str], str]:
+    """El mismo diagnóstico de pip, nombrando el manifiesto de donde salieron."""
+
+    def explicar(archivos: Mapping[str, bytes], log: str) -> str:
+        return _explicar_fallo_pip(archivos, log).replace(
+            "requirements.txt", manifiesto
+        )
+
+    return explicar
+
+
 def _explicar_fallo_maven(archivos: Mapping[str, bytes], log: str) -> str:
     texto = log or ""
     if "Child module" in texto:
@@ -393,6 +406,36 @@ RECETAS: dict[str, RecetaImagen] = {
 }
 
 
+def _recolectar_manifiesto(raiz: Path) -> dict[str, bytes]:
+    """`requirements.txt` equivalente al manifiesto del proyecto (backlog 10, ADR-017).
+
+    Vacío si el manifiesto no declara dependencias: entonces se usa la imagen base.
+
+    Raises:
+        ErrorConstruccionImagen: si el manifiesto declara algo que no se instala de
+            forma segura (dependencias locales, de Git o por URL).
+    """
+    from qagent.sandbox.manifiestos_python import (
+        ManifiestoNoSoportado,
+        dependencias_del_manifiesto,
+    )
+
+    try:
+        encontradas = dependencias_del_manifiesto(raiz)
+    except (ManifiestoNoSoportado, OSError, UnicodeError) as error:
+        raise ErrorConstruccionImagen(str(error), "") from error
+    if encontradas is None or not encontradas.requisitos:
+        return {}
+    return {"requirements.txt": encontradas.como_requirements()}
+
+
+def _describir_manifiesto(nombre: str) -> Callable[[Mapping[str, bytes]], str]:
+    def describir(_archivos: Mapping[str, bytes]) -> str:
+        return nombre
+
+    return describir
+
+
 def _receta_base_python(imagen: str) -> RecetaImagen:
     return RecetaImagen(
         imagen=imagen,
@@ -407,8 +450,35 @@ def _receta_base_python(imagen: str) -> RecetaImagen:
                 _dockerfile_pip,
                 explicar_fallo=_explicar_fallo_pip,
             ),
+            # Backlog 10 (ADR-017): sin requirements.txt, el manifiesto del proyecto.
+            # Se instala la lista equivalente, con la misma revisión y sin instalar
+            # nunca el proyecto mismo.
+            Dependencias(
+                "pyproject.toml",
+                ("pyproject.toml",),
+                (),
+                _dockerfile_pip,
+                recolectar=_recolectar_manifiesto,
+                describir=_describir_manifiesto("pyproject.toml"),
+                explicar_fallo=_explicar_fallo_pip_de("pyproject.toml"),
+            ),
+            Dependencias(
+                "setup.cfg",
+                ("setup.cfg",),
+                (),
+                _dockerfile_pip,
+                recolectar=_recolectar_manifiesto,
+                describir=_describir_manifiesto("setup.cfg"),
+                explicar_fallo=_explicar_fallo_pip_de("setup.cfg"),
+            ),
         ),
     )
+
+
+# La imagen Python por defecto usa la misma receta que las demás versiones de Python:
+# así sus formas de instalar dependencias (requirements.txt y manifiestos, ADR-017)
+# no se separan.
+RECETAS[IMAGEN_BASE] = _receta_base_python(IMAGEN_BASE)
 
 
 def receta_de(imagen: str) -> RecetaImagen:
@@ -622,7 +692,8 @@ def preparar_imagen(
         return receta.imagen
     forma, archivos = encontrada
     # M3: el `requirements.txt` no puede cambiar el índice de pip ni permitir sdist.
-    if forma.nombre == "requirements.txt":
+    # También el que se arma desde pyproject.toml o setup.cfg (ADR-017).
+    if "requirements.txt" in archivos and receta.prefijo == "req-":
         revisar_requirements(archivos["requirements.txt"])
 
     etiqueta = etiqueta_para_dependencias(
@@ -739,7 +810,10 @@ def _buscar_dependencias(
         if not any((raiz / nombre).is_file() for nombre in forma.obligatorios):
             continue
         if forma.recolectar is not None:
-            return forma, forma.recolectar(raiz)
+            archivos = forma.recolectar(raiz)
+            if not archivos:
+                continue  # el manifiesto no declara dependencias: se prueba la siguiente
+            return forma, archivos
         archivos = {
             nombre: (raiz / nombre).read_bytes()
             for nombre in (*forma.obligatorios, *forma.opcionales)

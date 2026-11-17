@@ -12,6 +12,7 @@ from pathlib import Path
 
 from tree_sitter import Node
 
+from qagent.lenguajes.java_identidad import es_sobrecarga
 from qagent.lenguajes.treesitter import obtener_parser
 from qagent.sandbox.pit_comando import comando_pit
 from qagent.xml_seguro import parsear_xml
@@ -245,6 +246,10 @@ def _validar_objetivos(
     nombres = [n.child_by_field_name("name").text.decode("utf-8") for n in metodos]
     resultado = {}
     for objetivo in funciones:
+        if es_sobrecarga(objetivo):
+            raise ValueError(
+                "PIT selecciona los métodos a mutar por nombre: no puede mutar una sola versión de un método sobrecargado sin mutar también las demás."
+            )
         metodo = objetivo.split(".")[-1]
         if nombres.count(metodo) != 1:
             raise ValueError(
